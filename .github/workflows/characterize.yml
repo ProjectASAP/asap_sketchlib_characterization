@@ -1,0 +1,142 @@
+name: Characterize
+
+on:
+  workflow_dispatch:
+    inputs:
+      sketch_bench_ref:
+        description: sketch-bench branch, tag or commit to build
+        default: main
+      trials:
+        description: trials per sketch and N
+        default: "1024"
+      cms_trials:
+        description: trials for the Count-Min point-query figure
+        default: "8192"
+      sketches:
+        description: comma-separated sketch ids and/or cms_point_query; empty runs all
+        default: ""
+      publish:
+        description: commit results/<sha> to this branch
+        type: boolean
+        default: true
+
+concurrency:
+  group: characterize
+  cancel-in-progress: false
+
+env:
+  SKETCH_BENCH_DIR: ${{ github.workspace }}/sketch-bench
+  # One binary runs on every runner; sketch-bench's .cargo/config.toml asks for target-cpu=native.
+  RUSTFLAGS: -C target-cpu=x86-64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      bench_sha: ${{ steps.plan.outputs.bench_sha }}
+      run: ${{ steps.plan.outputs.run }}
+      jobs: ${{ steps.plan.outputs.jobs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ProjectASAP/sketch-bench
+          ref: ${{ inputs.sketch_bench_ref }}
+          path: sketch-bench
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sketch-bench
+      - run: cargo build --release --locked -p aqpbm-cli --bin approxbench
+        working-directory: sketch-bench
+      - id: plan
+        env:
+          SKETCHES: ${{ inputs.sketches }}
+        run: |
+          echo "bench_sha=$(git -C sketch-bench rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 - >> "$GITHUB_OUTPUT" <<'EOF'
+          import json, os
+          from characterize import DEFAULT_BENCH, run_dir
+          from grid import SKETCHES
+          known = [s.id for s in SKETCHES] + ["cms_point_query"]
+          asked = [i for i in os.environ["SKETCHES"].split(",") if i] or known
+          unknown = [i for i in asked if i not in known]
+          if unknown:
+              raise SystemExit(f"unknown sketches {unknown}; known: {known}")
+          print(f"run={run_dir(DEFAULT_BENCH).name}")
+          print(f"jobs={json.dumps(asked)}")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: approxbench
+          path: sketch-bench/target/release/approxbench
+          retention-days: 1
+
+  characterize:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.build.outputs.jobs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ProjectASAP/sketch-bench
+          ref: ${{ needs.build.outputs.bench_sha }}
+          path: sketch-bench
+      - uses: actions/download-artifact@v4
+        with:
+          name: approxbench
+          path: sketch-bench/target/release
+      - run: chmod +x sketch-bench/target/release/approxbench
+      - if: matrix.job == 'cms_point_query'
+        run: python3 cms_point_query.py --trials ${{ inputs.cms_trials }}
+      - if: matrix.job != 'cms_point_query'
+        run: python3 characterize.py --sketches ${{ matrix.job }} --trials ${{ inputs.trials }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.job }}
+          path: results/${{ needs.build.outputs.run }}
+          retention-days: 7
+
+  publish:
+    needs: [build, characterize]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RUN: results/${{ needs.build.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ProjectASAP/sketch-bench
+          ref: ${{ needs.build.outputs.bench_sha }}
+          path: sketch-bench
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          path: parts
+      - run: python3 merge.py "$RUN" parts/*
+      - if: hashFiles(format('{0}/raw.jsonl', env.RUN)) != ''
+        run: python3 report.py "$RUN"
+      - if: hashFiles(format('{0}/cms_point_query.jsonl', env.RUN)) != ''
+        run: python3 cms_point_query.py --trials ${{ inputs.cms_trials }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ needs.build.outputs.run }}
+          path: ${{ env.RUN }}
+          retention-days: 90
+      - if: inputs.publish
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$RUN"
+          git diff --cached --quiet && exit 0
+          git commit -m "results: asap_sketchlib ${RUN#results/} (sketch-bench ${{ needs.build.outputs.bench_sha }})"
+          git pull --rebase
+          git push
