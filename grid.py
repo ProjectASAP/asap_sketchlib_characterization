@@ -1,10 +1,10 @@
-"""The sketches characterized, the data each trial sees, and the theory each is drawn against.
+"""The sketches characterized, the data each trial sees, and the bound each is drawn against.
 
 One trial is one approxbench run at one stream length N; trials differ in their
 data, so each sees a fresh key set, and seeded sketches take seed = trial + 1.
+The bounds come from asap_sketchlib's own analytics through theory/ (see report.py).
 """
 
-import math
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -18,14 +18,33 @@ ZIPF_SHIFT = 1 << 24
 
 
 @dataclass(frozen=True)
-class Theory:
-    label: str
-    value: float
+class Bound:
+    """The asap_sketchlib `SketchAnalytics::theoretical_error` call a figure draws.
+
+    `algorithm` and `statistic` name asap_sketchlib's `SketchAlgorithm` and
+    `StatisticKind`; `impl` picks the type where one algorithm covers several
+    (theory/src/main.rs). `params` are the analytics `Params` fields. `metric` is the
+    `ErrorMetric` the per-trial value is stated in, which report.py checks the
+    library's answer against. `data` fills an analytics `Data` field from one N's
+    trials, as (accuracy field, "max" or "median"); `fixed` fills the rest.
+    """
+    algorithm: str
+    statistic: str
+    params: dict
+    metric: str
+    delta: float | None = None
+    impl: str | None = None
+    data: dict = field(default_factory=dict)
+    fixed: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class Sketch:
+    """One (variant, config): one id in raw.jsonl and summary.json."""
     id: str
+    # The figure it is drawn on, and its name there (the parameter its family varies).
+    family: str
+    label: str
     title: str
     variant: str
     config: str
@@ -35,15 +54,30 @@ class Sketch:
     value: Callable[[dict, int], float]
     metric: str
     signed: bool
-    theory: list[Theory] = field(default_factory=list)
+    bound: Bound | None = None
+    # Why there is no bound, for a sketch without one.
     theory_note: str = ""
-    # Share of trials the shaded area holds: what the bound promises, or 95% without one.
-    cover: float = 0.95
     # Adds seed=<trial + 1> to the config.
     seeded: bool = False
     # sketch-bench --trial-mode for trial t; data() then gives trial 0's spec.
     trial_mode: str | None = None
     extra: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Family:
+    """One figure: the same sketch at three configs that differ in one parameter, in its order."""
+    id: str
+    configs: tuple[Sketch, ...]
+
+    @property
+    def title(self) -> str:
+        return self.configs[0].title
+
+    @property
+    def lead(self) -> Sketch:
+        """The config whose metric, data and sign the whole figure shares."""
+        return self.configs[0]
 
 
 def n_grid(lg_min: int, lg_max: int, ppo: int) -> list[int]:
@@ -135,200 +169,189 @@ def hydra_records(value_type: str):
     return data
 
 
-def median_failure(d: int, beta: float) -> float:
-    need = (d + 1) // 2
-    return sum(math.comb(d, i) * beta**i * (1 - beta) ** (d - i) for i in range(need, d + 1))
-
-
-def count_sketch_eps(w: int, d: int, delta: float) -> float:
-    """sketch_analytics.md CountSketch: eps = sqrt(q / beta), q = 1/w, P_med(d, beta) <= delta."""
-    lo, hi = 0.0, 0.5
-    for _ in range(100):
-        mid = (lo + hi) / 2
-        lo, hi = (mid, hi) if median_failure(d, mid) <= delta else (lo, mid)
-    return math.sqrt((1 / w) / lo)
-
-
-def rse_lines(c: float, m: int, unit: str = "RSE") -> list[Theory]:
-    rse = c / math.sqrt(m)
-    return [Theory(f"{s:+d} {unit}", s * rse) for s in (-2, 2)]
-
-
-# Share of a Gaussian within ±2σ.
-TWO_SIGMA = math.erf(2 / math.sqrt(2))
-
-
-def two_sided(eps: float, note: str) -> list[Theory]:
-    return [Theory(f"+ε ({note})", eps), Theory("−ε", -eps)]
-
-
 def hll_rel(acc: dict, n: int) -> float:
     return acc["estimate"] / acc["truth"] - 1
 
 
-def univmon_l2_eps(w: int) -> float:
-    """sketch_analytics.md CountSketchWithL2Norm: eps = 1 - sqrt(1 - sqrt(20q)), q = 1/w."""
-    return 1 - math.sqrt(1 - math.sqrt(20 / w))
-
-
-def kmv_eps(k: int, delta: float) -> float:
-    """sketch_analytics.md Kmv: the smallest ε whose two Chernoff terms sum to at most δ."""
-    def fail(e):
-        over = math.exp(-e * e * (k - 1) / ((1 + e) * (2 + e)))
-        return over + (math.exp(-e * e * (k - 1) / (2 * (1 - e))) if e < 1 else 0.0)
-    lo, hi = 0.0, 1.0
-    for _ in range(100):
-        mid = (lo + hi) / 2
-        lo, hi = (lo, mid) if fail(mid) <= delta else (mid, hi)
-    return hi
-
-
-LG_K, KLL_K, DD_ALPHA, ROWS, COLS = 12, 200, 0.01, 3, 1024
-KMV_K, KMV_DELTA, SS_CAPACITY = 4096, 0.05, 1024
-KLL_EPS = 2.296 / KLL_K**0.9723
-KLL_NOTE = "uniform i64 values, new values per trial; compaction seed = trial + 1"
+ROWS, KLL_K = 3, 200
+KMV_DELTA = 0.05
+# δ for the bounds whose δ the caller chooses (Count Sketch takes asap_sketchlib's default, 0.01).
+CS_DELTA, UM_DELTA = 0.01, 0.05
 TOPK = 32
-UM_KEYS, UM_HEAP, UM_LAYERS = 100_000, 64, 14
-HYDRA_GRID = "rows=3 cols=1024"
+UM_KEYS, UM_HEAP, UM_COLS, UM_LAYERS = 100_000, 64, 1024, 14
+HYDRA_ROWS, HYDRA_COLS = 3, 1024
+HYDRA_GRID = f"rows={HYDRA_ROWS} cols={HYDRA_COLS}"
+# Each trial's exact distinct count, as approxbench reports it.
+TRUE_DISTINCT = ("truth", "median")
+UNIFORM_NOTE = "uniform i64 keys over [0, 1e12), new keys per trial"
+ZIPF_NOTE = f"Zipf(s = {ZIPF_SKEW}) over {ZIPF_KEYS} keys, key set shifted per trial"
+KLL_NOTE = "uniform i64 values, new values per trial; compaction seed = trial + 1"
 HYDRA_DATA_NOTE = ("label key1 uniform over 200 values, key2 Zipf(1.1) over 50, value Zipf(1.2) over 1000; "
                    "grouped by key1, new draws and new label strings per trial (--trial-mode fresh)")
-TOPK_NOTE = f"Zipf(s = {ZIPF_SKEW}) over {ZIPF_KEYS} keys, key set shifted per trial"
 UM_NOTE = (f"Zipf(s = {ZIPF_SKEW}) u64 keys over {UM_KEYS:,}, each weighted uniform in [1, 100], "
            "key set shifted per trial")
+TOPK_THEORY = "none: asap_sketchlib's TopK bound covers each reported count, not recall"
+HYDRA_THEORY = ("none drawn: asap_sketchlib bounds one subpopulation's estimate given its N_Q, D_Q "
+                "or ‖f_Q‖₂, not this mean over subpopulations")
 
-SKETCHES = [
-    Sketch(
-        id="hll", title="HyperLogLog (Classic)", variant="hll",
-        config=f"lg_k={LG_K}", comparator="cardinality",
-        data=uniform_keys, data_note="uniform i64 keys over [0, 1e12), new keys per trial",
-        value=hll_rel, metric="estimate / truth − 1", signed=True,
-        theory=rse_lines(1.04, 1 << LG_K), cover=TWO_SIGMA,
-        theory_note=f"RSE = 1.04/√m, m = {1 << LG_K}",
-    ),
-    Sketch(
-        id="hll-hip", title="HyperLogLog (HIP)", variant="hll-hip",
-        config=f"lg_k={LG_K}", comparator="cardinality",
-        data=uniform_keys, data_note="uniform i64 keys over [0, 1e12), new keys per trial",
-        value=hll_rel, metric="estimate / truth − 1", signed=True,
-        theory=rse_lines(math.sqrt(math.log(2)), 1 << LG_K), cover=TWO_SIGMA,
-        theory_note=f"RSE = √(ln 2)/√m, m = {1 << LG_K}",
-    ),
-    *[Sketch(
-        id=sid, title=title, variant=variant,
-        config=f"k={KLL_K}", comparator="rank-error", seeded=True, extra=("--quantiles", "0.5"),
+
+def family(fid: str, values, make) -> "Family":
+    return Family(fid, tuple(make(v) for v in values))
+
+
+def hll(fid: str, title: str, algorithm: str, impl: str | None) -> Family:
+    # sketch-bench builds asap_sketchlib's HLL at lg_k 12, 14 and 16 only (fixed register types).
+    def make(lg_k):
+        data = {"max_distinct": ("truth", "max")} if impl == "classic" else {}
+        return Sketch(
+            id=f"{fid}-lgk{lg_k}", family=fid, label=f"lg_k = {lg_k}", title=title, variant=fid,
+            config=f"lg_k={lg_k}", comparator="cardinality",
+            data=uniform_keys, data_note=UNIFORM_NOTE,
+            value=hll_rel, metric="estimate / truth − 1", signed=True,
+            bound=Bound(algorithm, "Distinct", {"precision": lg_k}, "Relative", impl=impl, data=data),
+        )
+    return family(fid, (12, 14, 16), make)
+
+
+def kll(fid: str, title: str, variant: str, algorithm: str, how: str) -> Family:
+    return family(fid, (100, 200, 400), lambda k: Sketch(
+        id=f"{fid}-k{k}", family=fid, label=f"k = {k}", title=title, variant=variant,
+        config=f"k={k}", comparator="rank-error", seeded=True, extra=("--quantiles", "0.5"),
         data=uniform_keys, data_note=KLL_NOTE,
         value=lambda acc, n: acc["rank_err_q0.5"], metric=f"rank error of the median query{how}",
         signed=False,
-        theory=[Theory("ε (99%, one query)", KLL_EPS)], cover=0.99,
-        theory_note=f"ε = 2.296/k^0.9723, k = {KLL_K}",
-    ) for sid, title, variant, how in (
-        ("kll", "KLL", "kll-percall", ""),
-        ("kll-cdf", "KLL (CDF)", "kll-cdf", ", read from one cdf()"),
-        ("kll-dynamic", "KLL (dynamic)", "kll-dynamic", ""),
-    )],
-    Sketch(
-        id="dd", title="DDSketch", variant="dd",
-        config=f"alpha={DD_ALPHA}", comparator="relative-value-error",
+        # A median query, answered per call or from the cdf() table: a Quantile readout.
+        bound=Bound(algorithm, "Quantile", {"k": k}, "Rank"),
+    ))
+
+
+def dd() -> Family:
+    return family("dd", (0.005, 0.01, 0.02), lambda alpha: Sketch(
+        id=f"dd-a{alpha}", family="dd", label=f"α = {alpha}", title="DDSketch", variant="dd",
+        config=f"alpha={alpha}", comparator="relative-value-error",
         data=pareto_values, data_note="Pareto(α = 2, scale 1000) f64 values, new values per trial",
         value=lambda acc, n: acc["max_relative_value_error"],
         metric="max relative value error over 101 quantiles", signed=False,
-        theory=[Theory("α (hard bound)", DD_ALPHA)], cover=1.0,
-        theory_note=f"ε = α = {DD_ALPHA}",
-    ),
-    Sketch(
-        id="cms", title="Count-Min", variant="cms-fastpath-vector2d",
-        config=f"rows={ROWS} cols={COLS}", comparator="frequency",
-        data=zipf_shifted,
-        data_note=f"Zipf(s = {ZIPF_SKEW}) over {ZIPF_KEYS} keys, key set shifted per trial",
-        value=lambda acc, n: acc["aae_top1"] / n, metric="error of the top key / N",
-        signed=False,
-        theory=[Theory(f"ε = e/w (δ = e^−{ROWS})", math.e / COLS)], cover=1 - math.exp(-ROWS),
-        theory_note=f"ε = e/w, δ = e^−d = {math.exp(-ROWS):.3f}",
-    ),
-    Sketch(
-        id="cs", title="Count Sketch", variant="countsketch-fastpath-vector2d",
-        config=f"rows={ROWS} cols={COLS}", comparator="frequency",
-        data=zipf_shifted,
-        data_note=f"Zipf(s = {ZIPF_SKEW}) over {ZIPF_KEYS} keys, key set shifted per trial",
-        value=lambda acc, n: acc["aae_top1"] / acc["stream_l2"], metric="|error| of the top key / ‖f‖₂",
-        signed=False,
-        theory=[Theory("ε (δ = 0.01)", count_sketch_eps(COLS, ROWS, 0.01))], cover=0.99,
-        theory_note="ε = √(q/β), q = 1/w, P_med(d, β) = 0.01",
-    ),
-    Sketch(
-        id="hll-ertl", title="HyperLogLog (Ertl)", variant="hll-ertl",
-        config=f"lg_k={LG_K}", comparator="cardinality",
-        data=uniform_keys, data_note="uniform i64 keys over [0, 1e12), new keys per trial",
+        bound=Bound("DDSketch", "Quantile", {"alpha": alpha}, "Relative"),
+    ))
+
+
+def matrix(fid: str, title: str, variant: str, algorithm: str, widths, value, metric, metric_kind,
+           delta=None) -> Family:
+    return family(fid, widths, lambda w: Sketch(
+        id=f"{fid}-w{w}", family=fid, label=f"w = {w}", title=title, variant=variant,
+        config=f"rows={ROWS} cols={w}", comparator="frequency",
+        data=zipf_shifted, data_note=ZIPF_NOTE,
+        value=value, metric=metric, signed=False,
+        bound=Bound(algorithm, "ItemFrequency", {"rows": ROWS, "cols": w}, metric_kind,
+                    delta=delta, impl="fast"),
+    ))
+
+
+def kmv() -> Family:
+    return family("kmv", (1024, 4096, 16384), lambda k: Sketch(
+        id=f"kmv-k{k}", family="kmv", label=f"k = {k}", title="KMV", variant="kmv",
+        config=f"k={k}", comparator="cardinality",
+        data=uniform_keys, data_note=UNIFORM_NOTE,
         value=hll_rel, metric="estimate / truth − 1", signed=True,
-        theory=rse_lines(1.04, 1 << LG_K), cover=TWO_SIGMA,
-        theory_note=f"RSE = 1.04/√m, m = {1 << LG_K}",
-    ),
-    Sketch(
-        id="kmv", title="KMV", variant="kmv",
-        config=f"k={KMV_K}", comparator="cardinality",
-        data=uniform_keys, data_note="uniform i64 keys over [0, 1e12), new keys per trial",
-        value=hll_rel, metric="estimate / truth − 1", signed=True,
-        theory=two_sided(kmv_eps(KMV_K, KMV_DELTA), f"δ = {KMV_DELTA}"), cover=1 - KMV_DELTA,
-        theory_note=f"Chernoff ε at δ = {KMV_DELTA}, k = {KMV_K}; exact below k distinct",
-    ),
-    Sketch(
-        id="space-saving", title="Space-Saving", variant="space-saving",
-        config=f"capacity={SS_CAPACITY}", comparator="frequency",
-        data=zipf_shifted,
-        data_note=f"Zipf(s = {ZIPF_SKEW}) over {ZIPF_KEYS} keys, key set shifted per trial",
+        bound=Bound("KMV", "Distinct", {"k": k}, "Relative", delta=KMV_DELTA, data={"distinct": TRUE_DISTINCT}),
+    ))
+
+
+def space_saving() -> Family:
+    return family("space-saving", (512, 1024, 2048), lambda m: Sketch(
+        id=f"space-saving-m{m}", family="space-saving", label=f"m = {m}", title="Space-Saving",
+        variant="space-saving", config=f"capacity={m}", comparator="frequency",
+        data=zipf_shifted, data_note=ZIPF_NOTE,
         value=lambda acc, n: acc["aae_top1"] / n, metric="error of the top key / N", signed=False,
-        theory=[Theory("ε = 1/m (hard bound)", 1 / SS_CAPACITY)], cover=1.0,
-        theory_note=f"ε = 1/m, δ = 0, m = {SS_CAPACITY}",
-    ),
-    *[Sketch(
-        id=sid, title=title, variant=variant, config=config, comparator="topk",
-        data=zipf_shifted, data_note=TOPK_NOTE,
+        bound=Bound("SpaceSaving", "ItemFrequency", {"capacity": m}, "L1", fixed={"merged": False}),
+    ))
+
+
+def topk(fid: str, title: str, variant: str, config) -> Family:
+    return family(fid, (256, 1024, 4096), lambda w: Sketch(
+        id=f"{fid}-w{w}", family=fid, label=f"w = {w}", title=title, variant=variant,
+        config=config(w), comparator="topk",
+        data=zipf_shifted, data_note=ZIPF_NOTE,
         value=lambda acc, n: 1 - acc["recall_at_k"], metric=f"1 − recall@{TOPK}",
-        signed=False, theory_note="none: sketch_analytics.md bounds each reported count, not recall",
-    ) for sid, title, variant, config in (
-        ("cms-heap-topk", "Count-Min + heap, top-k", "cms-heap-topk-fastpath-vector2d",
-         f"rows={ROWS} cols={COLS} heap={TOPK}"),
-        ("cs-heap-topk", "Count Sketch + heap, top-k", "countsketch-heap-topk-fastpath-vector2d",
-         f"rows={ROWS} cols={COLS} heap={TOPK}"),
-        ("univmon-topk", "UnivMon, top-k", "univmon-topk",
-         f"heap_size={TOPK} sketch_row={ROWS} sketch_col={COLS} layer_size=8"),
-    )],
-    *[Sketch(
-        id=f"univmon-{stat}", title=f"UnivMon, {title}", variant=f"univmon-{stat}",
-        config=f"heap_size={UM_HEAP} sketch_row={ROWS} sketch_col={COLS} layer_size={UM_LAYERS}",
-        comparator=f"keyed-{stat}", data=keyed_weights, data_note=UM_NOTE,
-        value=hll_rel, metric="estimate / truth − 1", signed=True,
-        theory=theory, theory_note=note, cover=cover,
-    ) for stat, title, theory, note, cover in (
-        ("cardinality", "cardinality", rse_lines(math.sqrt(1.35), UM_HEAP, "SD"),
-         f"SD ≤ √(1.35/k), k = {UM_HEAP}; L = {UM_LAYERS} keeps ψ ≈ 0", TWO_SIGMA),
-        ("l1-norm", "L1", [], "exact (contract univmon_unit_update_total)", 0.95),
-        ("l2-norm", "L2", two_sided(univmon_l2_eps(COLS), f"δ = {median_failure(ROWS, 0.1):.3f}"),
-         f"ε = 1 − √(1 − √(20/w)), w = {COLS}, δ = P_med(d, 0.1)", 1 - median_failure(ROWS, 0.1)),
-        ("entropy", "entropy", [], "none in sketch_analytics.md", 0.95),
-    )],
-    *[Sketch(
-        id=variant, title=title, variant=variant, config=config, comparator=comparator,
+        signed=False, theory_note=TOPK_THEORY,
+    ))
+
+
+def univmon(stat: str, title: str, statistic: str, values, param: str, delta=None, data=None) -> Family:
+    fid = f"univmon-{stat}"
+    def make(v):
+        p = {"heap_size": UM_HEAP, "rows": ROWS, "cols": UM_COLS, "layers": UM_LAYERS, param: v}
+        tag, label = {"heap_size": (f"k{v}", f"k = {v}"), "cols": (f"w{v}", f"w = {v}")}[param]
+        return Sketch(
+            id=f"{fid}-{tag}", family=fid, label=label, title=f"UnivMon, {title}", variant=fid,
+            config=f"heap_size={p['heap_size']} sketch_row={ROWS} sketch_col={p['cols']} layer_size={UM_LAYERS}",
+            comparator=f"keyed-{stat}", data=keyed_weights, data_note=UM_NOTE,
+            value=hll_rel, metric="estimate / truth − 1", signed=True,
+            bound=Bound("UnivMon", statistic, p, "Relative", delta=delta, data=data or {}),
+        )
+    return family(fid, values, make)
+
+
+def hydra(variant: str, title: str, comparator: str, vtype: str, what: str, values, tag: str,
+          label: str, config) -> Family:
+    return family(variant, values, lambda v: Sketch(
+        id=f"{variant}-{tag}{v}", family=variant, label=f"{label} = {v}", title=title, variant=variant,
+        config=config(v), comparator=comparator,
         data=hydra_records(vtype), data_note=HYDRA_DATA_NOTE,
         value=lambda acc, n: acc["err_mean"], metric=f"mean over subpopulations of {what}",
         signed=False, seeded=variant.startswith("hydra-kll"), trial_mode="fresh",
-        theory_note="none drawn: the bound depends on each subpopulation's N_Q, D_Q or ‖f_Q‖₂",
-    ) for variant, title, config, comparator, vtype, what in (
-        ("hydra-cms", "Hydra over Count-Min", f"{HYDRA_GRID} cell_rows=3 cell_cols=1024",
-         "subpop-frequency", "i64", "relative frequency error"),
-        ("hydra-cs", "Hydra over Count Sketch", f"{HYDRA_GRID} cell_rows=3 cell_cols=1024",
-         "subpop-frequency", "i64", "relative frequency error"),
-        ("hydra-hll", "Hydra over HyperLogLog", HYDRA_GRID,
-         "subpop-cardinality", "i64", "relative cardinality error"),
-        ("hydra-kll", "Hydra over KLL", f"{HYDRA_GRID} cell_k={KLL_K}",
-         "subpop-rank-error", "f64", "max rank error"),
-        ("hydra-kll-cdf", "Hydra over KLL (CDF)", f"{HYDRA_GRID} cell_k={KLL_K}",
-         "subpop-cdf-error", "f64", "CDF error"),
-        *[(f"hydra-univmon-{stat}", f"Hydra over UnivMon, {stat}",
-           f"{HYDRA_GRID} cell_heap_size=32 cell_sketch_row=3 cell_sketch_col=256 cell_layer_size=8",
-           f"subpop-{stat}", "i64", f"relative {stat} error")
-          for stat in ("cardinality", "l1-norm", "l2-norm", "entropy", "sum")],
-    )],
+        theory_note=HYDRA_THEORY,
+    ))
+
+
+FAMILIES = [
+    hll("hll", "HyperLogLog (Classic)", "HLL", "classic"),
+    hll("hll-hip", "HyperLogLog (HIP)", "HLLHip", None),
+    kll("kll", "KLL", "kll-percall", "KLL", ""),
+    kll("kll-cdf", "KLL (CDF)", "kll-cdf", "KLL", ", read from one cdf()"),
+    kll("kll-dynamic", "KLL (dynamic)", "kll-dynamic", "KLLDynamic", ""),
+    dd(),
+    matrix("cms", "Count-Min", "cms-fastpath-vector2d", "CountMinSketch", (512, 1024, 2048),
+           lambda acc, n: acc["aae_top1"] / n, "error of the top key / N", "L1"),
+    matrix("cs", "Count Sketch", "countsketch-fastpath-vector2d", "CountSketch", (256, 1024, 4096),
+           lambda acc, n: acc["aae_top1"] / acc["stream_l2"], "|error| of the top key / ‖f‖₂", "L2",
+           delta=CS_DELTA),
+    hll("hll-ertl", "HyperLogLog (Ertl)", "HLL", "ertl"),
+    kmv(),
+    space_saving(),
+    topk("cms-heap-topk", "Count-Min + heap, top-k", "cms-heap-topk-fastpath-vector2d",
+         lambda w: f"rows={ROWS} cols={w} heap={TOPK}"),
+    topk("cs-heap-topk", "Count Sketch + heap, top-k", "countsketch-heap-topk-fastpath-vector2d",
+         lambda w: f"rows={ROWS} cols={w} heap={TOPK}"),
+    topk("univmon-topk", "UnivMon, top-k", "univmon-topk",
+         lambda w: f"heap_size={TOPK} sketch_row={ROWS} sketch_col={w} layer_size=8"),
+    univmon("cardinality", "cardinality", "Distinct", (16, 64, 256), "heap_size",
+            delta=UM_DELTA, data={"distinct": TRUE_DISTINCT}),
+    # An exact Total bounds the relative error at 0 too.
+    univmon("l1-norm", "L1", "Total", (256, 1024, 4096), "cols"),
+    univmon("l2-norm", "L2", "FrequencyL2", (256, 1024, 4096), "cols"),
+    univmon("entropy", "entropy", "FrequencyEntropy", (256, 1024, 4096), "cols"),
+    *[hydra(v, t, c, vt, what, (256, 1024, 4096), "cw", "cell w",
+            lambda w: f"{HYDRA_GRID} cell_rows=3 cell_cols={w}")
+      for v, t, c, vt, what in (
+          ("hydra-cms", "Hydra over Count-Min", "subpop-frequency", "i64", "relative frequency error"),
+          ("hydra-cs", "Hydra over Count Sketch", "subpop-frequency", "i64", "relative frequency error"))],
+    # Hydra's HLL cell has no precision in sketch-bench, so this one varies Hydra's own grid width.
+    hydra("hydra-hll", "Hydra over HyperLogLog", "subpop-cardinality", "i64", "relative cardinality error",
+          (256, 1024, 4096), "w", "w", lambda w: f"rows={HYDRA_ROWS} cols={w}"),
+    *[hydra(v, t, c, "f64", what, (100, 200, 400), "ck", "cell k",
+            lambda k: f"{HYDRA_GRID} cell_k={k}")
+      for v, t, c, what in (
+          ("hydra-kll", "Hydra over KLL", "subpop-rank-error", "max rank error"),
+          ("hydra-kll-cdf", "Hydra over KLL (CDF)", "subpop-cdf-error", "CDF error"))],
+    *[hydra(f"hydra-univmon-{stat}", f"Hydra over UnivMon, {stat}", f"subpop-{stat}", "i64",
+            f"relative {stat} error", (64, 256, 1024), "cw", "cell w",
+            lambda w: f"{HYDRA_GRID} cell_heap_size=32 cell_sketch_row=3 cell_sketch_col={w} cell_layer_size=8")
+      for stat in ("cardinality", "l1-norm", "l2-norm", "entropy", "sum")],
 ]
 
+SKETCHES = [s for f in FAMILIES for s in f.configs]
 BY_ID = {s.id: s for s in SKETCHES}
+BY_FAMILY = {f.id: f for f in FAMILIES}
+assert len(BY_ID) == len(SKETCHES) and not set(BY_ID) & set(BY_FAMILY), "ids and family names must be unique"

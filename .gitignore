@@ -2,3 +2,4 @@ __pycache__/
 results/*/raw.jsonl
 results/*/cms_point_query.jsonl
 results/*/run.log
+theory/target/

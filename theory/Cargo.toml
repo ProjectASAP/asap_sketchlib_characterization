@@ -1,0 +1,15 @@
+[package]
+name = "theory"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Prints asap_sketchlib's theoretical error for the sketches report.py draws"
+
+[dependencies]
+# Must be the asap_sketchlib sketch-bench links; report.py checks it against meta.json.
+asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", rev = "a05b35ce14e4079eaa6acb29dd8c416bd1a2a3d1", features = ["experimental"] }
+serde = "1"
+serde_json = "1"
+
+# Not part of any parent workspace.
+[workspace]

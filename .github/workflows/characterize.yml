@@ -13,7 +13,7 @@ on:
         description: trials for the Count-Min point-query figure
         default: "8192"
       sketches:
-        description: comma-separated sketch ids and/or cms_point_query; empty runs all
+        description: comma-separated sketch ids, family names and/or cms_point_query; empty runs all
         default: ""
       publish:
         description: commit results/<sha> to this branch
@@ -57,12 +57,15 @@ jobs:
           python3 - >> "$GITHUB_OUTPUT" <<'EOF'
           import json, os
           from characterize import DEFAULT_BENCH, run_dir
-          from grid import SKETCHES
+          from grid import BY_FAMILY, SKETCHES
           known = [s.id for s in SKETCHES] + ["cms_point_query"]
           asked = [i for i in os.environ["SKETCHES"].split(",") if i] or known
-          unknown = [i for i in asked if i not in known]
+          unknown = [i for i in asked if i not in known and i not in BY_FAMILY]
           if unknown:
-              raise SystemExit(f"unknown sketches {unknown}; known: {known}")
+              raise SystemExit(f"unknown sketches {unknown}; known: {list(BY_FAMILY)} and {known}")
+          # One job per config, so a slow config does not hold its family's others to one runner.
+          asked = list(dict.fromkeys(c for i in asked
+                                     for c in ([s.id for s in BY_FAMILY[i].configs] if i in BY_FAMILY else [i])))
           print(f"run={run_dir(DEFAULT_BENCH).name}")
           print(f"jobs={json.dumps(asked)}")
           EOF
@@ -121,6 +124,11 @@ jobs:
         with:
           pattern: part-*
           path: parts
+      # report.py builds theory/, which asks asap_sketchlib for each theory line.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: theory
       - run: python3 merge.py "$RUN" parts/*
       - if: hashFiles(format('{0}/raw.jsonl', env.RUN)) != ''
         run: python3 report.py "$RUN"

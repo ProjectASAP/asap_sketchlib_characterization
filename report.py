@@ -1,15 +1,28 @@
 #!/usr/bin/env python3
 """Aggregate <run>/raw.jsonl into per-N quantiles across trials and write <run>/summary.json,
-<run>/index.html and one standalone SVG per sketch in <run>/figures/."""
+<run>/index.html and one standalone SVG per sketch family in <run>/figures/<family>.svg.
+
+The theory lines are asap_sketchlib's own `theoretical_error`, asked through theory/
+at each N with that N's data (such as the distinct count), so a bound that depends on
+the data follows it."""
 
 import argparse
 import html
 import json
 import math
+import re
+import shutil
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-from grid import BY_ID, GAUSS_RANKS, SKETCHES
+from grid import BY_ID, FAMILIES, GAUSS_RANKS, SKETCHES
+
+THEORY = Path(__file__).resolve().parent / "theory"
+# Share of a Gaussian within ±2σ: what ±2 standard errors hold.
+TWO_SIGMA = math.erf(2 / math.sqrt(2))
+# What the shaded area holds where there is no bound.
+NO_BOUND_COVER = 0.95
 
 W, H = 720, 340
 ML, MR, MT, MB = 64, 144, 16, 44
@@ -22,39 +35,115 @@ def quantile(v: list[float], p: float) -> float:
     return v[i] + (v[j] - v[i]) * (x - i)
 
 
-def outside(sketch, v: list[float]) -> tuple[str, float] | None:
+def theory_binary(meta: dict) -> str:
+    """theory/'s binary, built if cargo is here, after checking it links the measured asap_sketchlib."""
+    rev = re.search(r'asap_sketchlib = \{[^}]*rev = "([0-9a-f]+)"', (THEORY / "Cargo.toml").read_text()).group(1)
+    m = re.search(r"\(git ([0-9a-f]+)\)", meta["asap_sketchlib"])
+    if not m or not rev.startswith(m.group(1)):
+        raise SystemExit(f"theory/Cargo.toml links asap_sketchlib {rev[:7]}, the run measured "
+                         f"{meta['asap_sketchlib']}: set its rev to the measured commit")
+    if shutil.which("cargo"):
+        subprocess.run(["cargo", "build", "--release", "--locked", "--quiet",
+                        "--manifest-path", str(THEORY / "Cargo.toml")], check=True)
+    exe = THEORY / "target/release/theory"
+    if not exe.exists():
+        raise SystemExit(f"{exe} is missing and cargo is not on PATH to build it")
+    return str(exe)
+
+
+def theoretical_errors(meta: dict, queries: list[dict]) -> list[dict | None]:
+    if not queries:
+        return []
+    r = subprocess.run([theory_binary(meta)], input=json.dumps(queries), capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"theory failed: {r.stderr.strip()}")
+    return json.loads(r.stdout)
+
+
+def theory_lines(s, bound: dict | None) -> tuple[list[tuple[str, float]], float]:
+    """The lines one N's bound draws, as (label, value), and the share of trials they should hold."""
+    if bound is None:
+        return [], NO_BOUND_COVER
+    eps = bound["epsilon"]
+    if eps == 0:
+        # An exact readout: one line at 0, whatever the sign.
+        return [("exact", 0.0)], 1 - (bound["delta"] or 0.0)
+    if bound["delta"] is None:
+        # A standard error with no δ: draw ±2 SE, which a Gaussian estimate stays inside 95.4% of the time.
+        lines = [("+2 SE", 2 * eps), ("−2 SE", -2 * eps)] if s.signed else [("2 SE", 2 * eps)]
+        return lines, TWO_SIGMA
+    lines = [("+ε", eps), ("−ε", -eps)] if s.signed else [("ε", eps)]
+    return lines, 1 - bound["delta"]
+
+
+def outside(s, lines: list[tuple[str, float]], v: list[float]) -> tuple[str, float] | None:
     """Share of trials past the theory line a reader would compare against."""
-    if not sketch.theory:
+    if not lines:
         return None
-    if sketch.signed:
-        two = [t for t in sketch.theory if t.label.startswith("+2 ")]
-        line = two[0] if two else max(sketch.theory, key=lambda t: t.value)
-        label = line.label.lstrip("+").split(" (")[0]
-        return f"outside ±{label}", sum(abs(x) > line.value for x in v) / len(v)
-    eps = sketch.theory[0].value
-    return f"above {sketch.theory[0].label}", sum(x > eps for x in v) / len(v)
+    label, top = lines[0]
+    if label == "exact":
+        return "not exact", sum(x != 0 for x in v) / len(v)
+    if s.signed:
+        return f"outside ±{label.lstrip('+')}", sum(abs(x) > top for x in v) / len(v)
+    return f"above {label}", sum(x > top for x in v) / len(v)
 
 
-def aggregate(raw_path: Path) -> dict:
+def reduce(xs: list[float], how: str) -> int:
+    xs = sorted(xs)
+    return round(xs[-1] if how == "max" else quantile(xs, 0.5))
+
+
+def aggregate(raw_path: Path, meta: dict) -> dict:
     vals = defaultdict(lambda: defaultdict(list))
+    # sketch -> N -> Data field -> one value per trial
+    data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    unknown = set()
     for line in raw_path.open():
         r = json.loads(line)
+        if r["sketch"] not in BY_ID:
+            unknown.add(r["sketch"])
+            continue
         vals[r["sketch"]][r["n"]].append(r["value"])
+        b = BY_ID[r["sketch"]].bound
+        if b:
+            for f, (key, _) in b.data.items():
+                data[r["sketch"]][r["n"]][f].append(r["acc"][key])
+    if unknown:
+        raise SystemExit(f"{raw_path} has sketch ids grid.py does not know: {sorted(unknown)}")
+
+    keys, queries = [], []
+    for sid, by_n in vals.items():
+        b = BY_ID[sid].bound
+        for n in by_n if b else ():
+            d = dict(b.fixed)
+            for f, (_, how) in b.data.items():
+                d[f] = reduce(data[sid][n][f], how)
+            keys.append((sid, n))
+            queries.append({"algorithm": b.algorithm, "statistic": b.statistic, "params": b.params,
+                            "data": d, "delta": b.delta, "impl": b.impl})
+    bounds = dict(zip(keys, theoretical_errors(meta, queries)))
+
     out = {}
     for sid, by_n in vals.items():
         s = BY_ID[sid]
         rows = []
         for n in sorted(by_n):
+            t = bounds.get((sid, n))
+            # An exact bound holds in any metric; any other must be in the figure's.
+            if t and t["epsilon"] > 0 and t["metric"] != s.bound.metric:
+                raise SystemExit(f"{sid}: asap_sketchlib bounds {s.bound.statistic} in {t['metric']}, "
+                                 f"the figure plots {s.bound.metric}")
+            lines, c = theory_lines(s, t)
             v = sorted(by_n[n])
-            o = outside(s, v)
-            c = s.cover
+            o = outside(s, lines, v)
             band = ([quantile(v, (1 - c) / 2), quantile(v, (1 + c) / 2)] if s.signed
                     else [v[0], quantile(v, c)])
             rows.append({
                 "n": n, "trials": len(v), "min": v[0], "max": v[-1],
                 "mean": sum(v) / len(v),
                 "q": [quantile(v, p) for p in GAUSS_RANKS],
-                "band": band,
+                "band": band, "cover": c,
+                "theory": t, "lines": lines,
                 "outside_label": o[0] if o else None,
                 "outside": o[1] if o else None,
             })
@@ -62,14 +151,59 @@ def aggregate(raw_path: Path) -> dict:
     return out
 
 
-def band_label(s) -> str:
-    """What the shaded area holds, in words."""
-    if s.cover >= 1:
+# One color per config position, so a config keeps its color while its family fills in
+# (Okabe-Ito blue, orange, bluish green; the blue lightens in dark mode).
+COLORS = ("#0072B2", "#E69F00", "#009E73")
+DARK_COLORS = ("#56B4E9", "#E69F00", "#009E73")
+GRAY = "#8a8984"
+# How far past the data a theory line may stretch the y axis.
+OFF_SCALE = 8
+
+
+def present(f, summary: dict) -> list[tuple[int, object, list[dict]]]:
+    """The family's configs that have trials, each with its color index."""
+    return [(i, s, summary[s.id]) for i, s in enumerate(f.configs) if s.id in summary]
+
+
+def band_label(signed: bool, rows: list[dict]) -> str:
+    """What the shaded areas hold, in words, over every config's rows."""
+    covers = sorted({round(r["cover"], 6) for r in rows})
+    bounded = any(r["theory"] for r in rows)
+    if len(covers) > 1:
+        return "at each N, the share of trials that config's bound covers there"
+    c = covers[0]
+    if c >= 1:
         text = "all trials"
     else:
-        pct = f"{s.cover * 100:.3g}%"
-        text = f"middle {pct} of trials" if s.signed else f"{pct} of trials are below its top edge"
-    return text + (" (the share the bound covers)" if s.theory else "")
+        pct = f"{c * 100:.3g}%"
+        text = f"middle {pct} of trials" if signed else f"{pct} of trials are below its top edge"
+    return text + (" (the share the bound covers)" if bounded else "")
+
+
+def bound_summary(rows: list[dict]) -> str:
+    """One config's bound in a few words: ε and δ as asap_sketchlib returned them."""
+    ts = [r["theory"] for r in rows if r["theory"]]
+    if not ts:
+        return "no bound"
+    eps = sorted({t["epsilon"] for t in ts})
+    text = "ε = " + (fmt(eps[0]) if len(eps) == 1 else f"{fmt(eps[0])} … {fmt(eps[-1])}")
+    deltas = sorted({t["delta"] for t in ts if t["delta"] is not None})
+    text += f", δ = {', '.join(fmt(d) for d in deltas)}" if deltas else " (standard error)"
+    missing = len(rows) - len(ts)
+    return text + (f"; none at {missing} of {len(rows)} N" if missing else "")
+
+
+def theory_note(f, cfgs) -> str:
+    """The family's bound: asap_sketchlib's statistic, contracts and metric, or why there is none."""
+    lead = f.lead
+    if lead.bound is None:
+        return lead.theory_note
+    ts = [r["theory"] for _, _, rows in cfgs for r in rows if r["theory"]]
+    if not ts:
+        return f"none: asap_sketchlib has no bound for {lead.bound.algorithm} {lead.bound.statistic}"
+    contracts = ", ".join(dict.fromkeys(t["contract"] for t in ts))
+    metrics = ", ".join(dict.fromkeys(t["metric"] for t in ts))
+    return f"asap_sketchlib {lead.bound.algorithm} {lead.bound.statistic}: {contracts} ({metrics})"
 
 
 def fmt(x: float) -> str:
@@ -98,16 +232,23 @@ def nice_ticks(lo: float, hi: float, count: int = 5) -> list[float]:
     return ticks
 
 
-def plot(sid: str, rows: list[dict]) -> tuple[list[str], list[float]]:
-    """The plot area's SVG elements in a W x H frame, and each N's x position."""
-    s = BY_ID[sid]
-    lg = [math.log2(r["n"]) for r in rows]
+def plot(f, cfgs) -> tuple[list[str], list[int], list[float]]:
+    """The plot area's SVG elements in a W x H frame, every N drawn, and each N's x position."""
+    signed = f.lead.signed
+    ns = sorted({r["n"] for _, _, rows in cfgs for r in rows})
+    lg = [math.log2(n) for n in ns]
     x0, x1 = math.floor(min(lg)), math.ceil(max(lg))
     x1 = max(x1, x0 + 1)
-    tvals = [t.value for t in s.theory]
-    top = max([r["band"][1] for r in rows] + tvals)
-    if s.signed:
-        bottom = min([r["band"][0] for r in rows] + tvals)
+    every = [r for _, _, rows in cfgs for r in rows]
+    # The axis holds the bands and every theory line within OFF_SCALE times their reach; a
+    # line past that is left off and marked at the right edge, so a vacuous bound cannot
+    # flatten the data.
+    reach = max(abs(v) for r in every for v in r["band"])
+    tvals = [v for r in every for _, v in r["lines"]]
+    tvals = [v for v in tvals if abs(v) <= OFF_SCALE * reach] if reach > 0 else tvals
+    top = max([r["band"][1] for r in every] + tvals)
+    if signed:
+        bottom = min([r["band"][0] for r in every] + tvals)
         m = max(abs(top), abs(bottom)) * 1.08 or 1.0
         y0, y1 = -m, m
     else:
@@ -119,9 +260,8 @@ def plot(sid: str, rows: list[dict]) -> tuple[list[str], list[float]]:
     def py(v):
         return MT + (y1 - v) / (y1 - y0) * (H - MT - MB)
 
-    xs = [px(l) for l in lg]
+    xof = {n: px(math.log2(n)) for n in ns}
     parts = []
-
     for t in nice_ticks(y0, y1):
         y = py(t)
         parts.append(f'<line class="grid" x1="{ML}" x2="{W - MR}" y1="{y:.1f}" y2="{y:.1f}"/>')
@@ -131,37 +271,78 @@ def plot(sid: str, rows: list[dict]) -> tuple[list[str], list[float]]:
         parts.append(f'<line class="grid" x1="{x:.1f}" x2="{x:.1f}" y1="{MT}" y2="{H - MB}"/>')
         parts.append(f'<text class="tick" x="{x:.1f}" y="{H - MB + 18}" text-anchor="middle">{n_label(2 ** l)}</text>')
     parts.append(f'<text class="axis" x="{(ML + W - MR) / 2:.0f}" y="{H - 6}" text-anchor="middle">stream length N</text>')
-    if s.signed:
+    if signed:
         parts.append(f'<line class="zero" x1="{ML}" x2="{W - MR}" y1="{py(0):.1f}" y2="{py(0):.1f}"/>')
 
-    upper = " ".join(f"{x:.1f},{py(r['band'][1]):.1f}" for x, r in zip(xs, rows))
-    lower = " ".join(f"{x:.1f},{py(r['band'][0]):.1f}" for x, r in reversed(list(zip(xs, rows))))
-    parts.append(f'<polygon class="band" points="{upper} {lower}"/>')
-    med = " ".join(f"{x:.1f},{py(r['q'][3]):.1f}" for x, r in zip(xs, rows))
-    parts.append(f'<polyline class="median" points="{med}"/>')
+    # The widest band first, so a narrower one stays visible on top of it.
+    def width(rows):
+        return sum(r["band"][1] - r["band"][0] for r in rows) / len(rows)
+    for i, _, rows in sorted(cfgs, key=lambda c: -width(c[2])):
+        upper = " ".join(f"{xof[r['n']]:.1f},{py(r['band'][1]):.1f}" for r in rows)
+        lower = " ".join(f"{xof[r['n']]:.1f},{py(r['band'][0]):.1f}" for r in reversed(rows))
+        parts.append(f'<polygon class="band c{i}" points="{upper} {lower}"/>')
+    for i, _, rows in cfgs:
+        med = " ".join(f"{xof[r['n']]:.1f},{py(r['q'][3]):.1f}" for r in rows)
+        parts.append(f'<polyline class="median c{i}" points="{med}"/>')
 
-    for t in s.theory:
-        y = py(t.value)
-        if MT <= y <= H - MB:
-            parts.append(f'<line class="theory" x1="{ML}" x2="{W - MR}" y1="{y:.1f}" y2="{y:.1f}"/>')
-            parts.append(f'<text class="tlabel" x="{W - MR + 6}" y="{y + 4:.1f}">{html.escape(t.label)}</text>')
-    return parts, xs
+    # Each config's theory lines, broken where an N has no bound and flat where the bound
+    # does not depend on N. Its top line is labeled with the config at the right edge.
+    labels = []
+    for i, s, rows in cfgs:
+        # The top line: the first one the last bounded N draws.
+        first = next((r["lines"][0][0] for r in reversed(rows) if r["lines"]), None)
+        for label in dict.fromkeys(l for r in rows for l, _ in r["lines"]):
+            runs, cur, off = [], [], False
+            for r in rows:
+                v = dict(r["lines"]).get(label)
+                if v is not None and not y0 <= v <= y1:
+                    off, v = True, None
+                if v is None:
+                    runs, cur = runs + [cur] if cur else runs, []
+                else:
+                    cur.append((xof[r["n"]], v))
+            runs += [cur] if cur else []
+            for run in runs[:]:
+                if len(run) == 1:
+                    run = [(run[0][0] - 4, run[0][1]), (run[0][0] + 4, run[0][1])]
+                pts = [(ML, run[0][1])] if run[0][0] == xof[ns[0]] else []
+                pts += run + ([(W - MR, run[-1][1])] if run[-1][0] == xof[ns[-1]] else [])
+                parts.append(f'<polyline class="theory c{i}" points="{" ".join(f"{x:.1f},{py(v):.1f}" for x, v in pts)}"/>')
+            if label != first:
+                continue
+            if runs:
+                labels.append([py(runs[-1][-1][1]) + 4, i, s.label + (" ↑" if off else "")])
+            elif off:
+                labels.append([MT + 8, i, f"{s.label} ↑"])
+    # Keep the right-edge labels at least a line apart, in their order.
+    labels.sort()
+    for k in range(1, len(labels)):
+        labels[k][0] = max(labels[k][0], labels[k - 1][0] + 12)
+    for y, i, text in labels:
+        parts.append(f'<text class="tlabel c{i}" x="{W - MR + 6}" y="{y:.1f}">{html.escape(text)}</text>')
+    return parts, ns, [xof[n] for n in ns]
 
 
-def chart(sid: str, rows: list[dict]) -> str:
-    s = BY_ID[sid]
-    body, xs = plot(sid, rows)
-    parts = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(s.title)} error quantiles vs N">',
+def chart(f, cfgs) -> str:
+    body, ns, xs = plot(f, cfgs)
+    parts = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(f.title)} error quantiles vs N">',
              *body]
     tips = []
-    for r in rows:
-        q = r["q"]
-        lines = [f"<b>N = {r['n']:,}</b> · {r['trials']} trials",
-                 f"99.87%: {fmt(q[6])}", f"97.7%: {fmt(q[5])}", f"84.1%: {fmt(q[4])}",
-                 f"median: {fmt(q[3])}", f"15.9%: {fmt(q[2])}", f"2.3%: {fmt(q[1])}",
-                 f"0.13%: {fmt(q[0])}"]
-        if r["outside"] is not None:
-            lines.append(f"{r['outside_label']}: {r['outside']:.2%}")
+    for n in ns:
+        lines = [f"<b>N = {n:,}</b>"]
+        for i, s, rows in cfgs:
+            r = next((r for r in rows if r["n"] == n), None)
+            if r is None:
+                continue
+            q = r["q"]
+            text = (f'<i class="sw c{i}"></i> <b>{html.escape(s.label)}</b> · {r["trials"]} trials · median {fmt(q[3])} · '
+                    + (f"2.3% … 97.7%: {fmt(q[1])} … {fmt(q[5])}" if f.lead.signed
+                       else f"97.7%: {fmt(q[5])} · 99.87%: {fmt(q[6])}"))
+            if r["theory"]:
+                text += f" · ε {fmt(r['theory']['epsilon'])}"
+            if r["outside"] is not None:
+                text += f" · {r['outside_label']}: {r['outside']:.2%}"
+            lines.append(text)
         tips.append("<br>".join(lines))
     parts.append(f'<line class="cursor" x1="0" x2="0" y1="{MT}" y2="{H - MB}" visibility="hidden"/>')
     parts.append(f'<rect class="hit" x="{ML}" y="{MT}" width="{W - ML - MR}" height="{H - MT - MB}" '
@@ -178,8 +359,9 @@ text{font-family:Helvetica,Arial,sans-serif;fill:#52514e}
 .grid{stroke:#e6e5e1;stroke-width:1}.zero{stroke:#8a8984;stroke-width:1}
 .band{fill:#b6d3f7}
 .median{fill:none;stroke:#1c5cab;stroke-width:2}
-.theory{stroke:#52514e;stroke-width:1.25;stroke-dasharray:5 4}
-"""
+.theory{fill:none;stroke:#52514e;stroke-width:1.25;stroke-dasharray:5 4}
+""" + "".join(f".band.c{i}{{fill:{c};fill-opacity:.35}}.median.c{i},.theory.c{i}{{stroke:{c}}}.tlabel.c{i}{{fill:{c}}}"
+              for i, c in enumerate(COLORS)) + f".band.gray{{fill:{GRAY};fill-opacity:.35}}.median.gray,.theory.gray{{stroke:{GRAY}}}\n"
 FIG_ML, FIG_LEGEND = 28, 52
 
 
@@ -194,67 +376,83 @@ def wrap(text: str, width: float, char_px: float) -> list[str]:
     return lines + [cur]
 
 
-def figure(sid: str, rows: list[dict]) -> str:
-    """One sketch as a standalone SVG: title, axis labels, legend, no script."""
-    s = BY_ID[sid]
-    body, _ = plot(sid, rows)
-    trials = max(r["trials"] for r in rows)
+def figure(f, cfgs) -> str:
+    """One family as a standalone SVG: title, axis labels, legend, no script."""
+    body, _, _ = plot(f, cfgs)
+    lead = f.lead
+    every = [r for _, _, rows in cfgs for r in rows]
+    trials = max(r["trials"] for r in every)
     w = FIG_ML + W
-    sub = wrap(s.config, w - FIG_ML - ML - 8, 6.4) + wrap(f"{s.data_note} · {trials} trials per N", w - FIG_ML - ML - 8, 6.4)
+    textw = w - FIG_ML - ML - 8
+    sub = (wrap("configs: " + " | ".join(s.config for _, s, _ in cfgs), textw, 6.4)
+           + wrap(f"{lead.data_note} · {trials} trials per N", textw, 6.4))
     top = 40 + 15 * len(sub)
-    h = top + H + FIG_LEGEND
+    # First the configs, one color each; then, on a new row, what the shapes mean.
+    items = [(f"c{i}", f"{s.label} · {bound_summary(rows)}") for i, s, rows in cfgs]
+    items += [None, ("band gray", f"shaded: {band_label(lead.signed, every)}"), ("median gray", "median"),
+              ("theory gray", f"theory: {theory_note(f, cfgs)}")]
+    legend, x, y = [], FIG_ML + ML, top + H + 14
+    for item in items:
+        if item is None:
+            x, y = FIG_ML + ML, y + 20
+            continue
+        cls, label = item
+        if x > FIG_ML + ML and x + 24 + 5.6 * len(label) > w - 8:
+            x, y = FIG_ML + ML, y + 20
+        if cls.startswith("c"):
+            legend.append(f'<rect class="band {cls}" x="{x}" y="{y - 9}" width="18" height="10" rx="2"/>'
+                          f'<line class="median {cls}" x1="{x}" x2="{x + 18}" y1="{y - 4}" y2="{y - 4}"/>')
+        elif cls.startswith("band"):
+            legend.append(f'<rect class="{cls}" x="{x}" y="{y - 9}" width="18" height="10" rx="2"/>')
+        else:
+            legend.append(f'<line class="{cls}" x1="{x}" x2="{x + 18}" y1="{y - 4}" y2="{y - 4}"/>')
+        # A label wider than the figure continues on the next lines, under its own start.
+        lines = wrap(label, w - 8 - (x + 24), 5.6)
+        for k, line in enumerate(lines):
+            legend.append(f'<text class="legend" x="{x + 24}" y="{y + 16 * k}">{html.escape(line)}</text>')
+        y += 16 * (len(lines) - 1)
+        x = x + 24 + 5.6 * len(lines[0]) + 18 if len(lines) == 1 else w
+    h = max(top + H + FIG_LEGEND, y + 18)
     ymid = top + MT + (H - MT - MB) / 2
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">',
            f'<style>{FIG_STYLE}</style>',
            f'<rect width="{w}" height="{h}" fill="#ffffff"/>',
-           f'<text class="title" x="{FIG_ML + ML}" y="22">{html.escape(s.title)}</text>',
+           f'<text class="title" x="{FIG_ML + ML}" y="22">{html.escape(f.title)}</text>',
            *(f'<text class="sub" x="{FIG_ML + ML}" y="{40 + 15 * i}">{html.escape(line)}</text>' for i, line in enumerate(sub)),
            f'<text class="axis" transform="translate(16 {ymid:.0f}) rotate(-90)" text-anchor="middle">'
-           f'{html.escape(s.metric)}</text>',
-           f'<g transform="translate({FIG_ML} {top})">', *body, '</g>']
-    items = [("band", f"shaded: {band_label(s)}"), ("median", "median")]
-    if s.theory:
-        items.append(("theory", f"theory: {s.theory_note}"))
-    x, y = FIG_ML + ML, top + H + 14
-    for cls, label in items:
-        if x > FIG_ML + ML and x + 24 + 5.6 * len(label) > w - 8:
-            x, y = FIG_ML + ML, y + 20
-        if cls == "band":
-            out.append(f'<rect class="{cls}" x="{x}" y="{y - 9}" width="18" height="10" rx="2"/>')
-        else:
-            out.append(f'<line class="{cls}" x1="{x}" x2="{x + 18}" y1="{y - 4}" y2="{y - 4}"/>')
-        out.append(f'<text class="legend" x="{x + 24}" y="{y}">{html.escape(label)}</text>')
-        x += 24 + 5.6 * len(label) + 18
-    out.append("</svg>")
+           f'{html.escape(lead.metric)}</text>',
+           f'<g transform="translate({FIG_ML} {top})">', *body, '</g>', *legend, "</svg>"]
     return "".join(out)
 
 
-def figure_name(s) -> str:
-    return f"{s.id}_{s.config.replace(' ', '_').replace('=', '')}.svg"
-
-
 def table(sid: str, rows: list[dict]) -> str:
-    olabel = next((r["outside_label"] for r in rows if r["outside_label"]), None)
+    labels = list(dict.fromkeys(r["outside_label"] for r in rows if r["outside_label"]))
+    olabel = labels[0] if len(labels) == 1 else ("past the bound" if labels else None)
     head = ["N", "trials", "min", "0.13%", "2.3%", "15.9%", "median", "84.1%", "97.7%", "99.87%", "max", "mean"]
     if olabel:
-        head.append(olabel)
+        head += ["bound ε", "δ", olabel]
     out = ["<table><thead><tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in head) + "</tr></thead><tbody>"]
     for r in rows:
         cells = [f"{r['n']:,}", str(r["trials"]), fmt(r["min"]), *map(fmt, r["q"]), fmt(r["max"]), fmt(r["mean"])]
         if olabel:
-            cells.append(f"{r['outside']:.2%}")
+            t = r["theory"]
+            cells += ([fmt(t["epsilon"]), "SE" if t["delta"] is None else fmt(t["delta"]), f"{r['outside']:.2%}"]
+                      if t else ["", "", ""])
         out.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
     out.append("</tbody></table>")
     return "".join(out)
 
 
+def color_vars(colors) -> str:
+    return "".join(f"--c{i}:{c};" for i, c in enumerate(colors))
+
+
 CSS = """
-:root{--surface:#fcfcfb;--card:#ffffff;--text:#0b0b0b;--text2:#52514e;--muted:#8a8984;--rule:#e6e5e1;
---band3:#cde2fb;--band2:#9ec5f4;--band1:#6da7ec;--median:#1c5cab;--theory:#52514e}
+:root{--surface:#fcfcfb;--card:#ffffff;--text:#0b0b0b;--text2:#52514e;--muted:#8a8984;--rule:#e6e5e1;--theory:#52514e;""" + color_vars(COLORS) + """}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--surface:#1a1a19;--card:#222221;--text:#f0efec;
---text2:#c3c2b7;--muted:#8f8e88;--rule:#34332f;--band3:#0d366b;--band2:#184f95;--band1:#256abf;--median:#9ec5f4;--theory:#c3c2b7}}
+--text2:#c3c2b7;--muted:#8f8e88;--rule:#34332f;--theory:#c3c2b7;""" + color_vars(DARK_COLORS) + """}}
 :root[data-theme="dark"]{--surface:#1a1a19;--card:#222221;--text:#f0efec;--text2:#c3c2b7;--muted:#8f8e88;--rule:#34332f;
---band3:#0d366b;--band2:#184f95;--band1:#256abf;--median:#9ec5f4;--theory:#c3c2b7}
+--theory:#c3c2b7;""" + color_vars(DARK_COLORS) + """}
 *{box-sizing:border-box}
 body{margin:0;background:var(--surface);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 main{max-width:1440px;margin:0 auto;padding:24px 16px 48px}
@@ -262,24 +460,29 @@ h1{font-size:22px;margin:0 0 4px}
 .meta{color:var(--text2);margin:0 0 12px}
 .read{color:var(--text2);max-width:900px;margin:0 0 20px}
 .legend{display:flex;flex-wrap:wrap;gap:16px;margin:0 0 20px;color:var(--text2);font-size:13px}
-.legend span{display:inline-flex;align-items:center;gap:6px}
-.sw{width:18px;height:10px;border-radius:2px;display:inline-block}
+.legend span,.cfgs span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:18px;height:10px;border-radius:2px;display:inline-block;vertical-align:middle}
 .grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,620px),1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--rule);border-radius:8px;padding:16px;position:relative}
 .card h2{font-size:16px;margin:0}
+.card h3{font-size:13px;margin:10px 0 0;font-weight:600}
 .card .sub{color:var(--text2);font-size:12.5px;margin:2px 0 8px}
+.cfgs{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;margin:0 0 8px}
+.cfgs code{color:var(--text2);font-size:11.5px}
 svg{width:100%;height:auto;display:block}
 .grid{stroke:var(--rule);stroke-width:1}
 .zero{stroke:var(--muted);stroke-width:1}
 .tick,.tlabel{fill:var(--text2);font-size:11px}
 .axis{fill:var(--text2);font-size:12px}
-.band{fill:var(--band2)}
-.median{fill:none;stroke:var(--median);stroke-width:2}
-.theory{stroke:var(--theory);stroke-width:1.25;stroke-dasharray:5 4}
+.median{fill:none;stroke-width:2}
+.theory{fill:none;stroke:var(--theory);stroke-width:1.25;stroke-dasharray:5 4}
+""" + "".join(f".band.c{i}{{fill:var(--c{i});fill-opacity:.35}}.median.c{i},.theory.c{i}{{stroke:var(--c{i})}}"
+              f".tlabel.c{i}{{fill:var(--c{i})}}.sw.c{i}{{background:var(--c{i})}}" for i in range(len(COLORS))) + """
 .cursor{stroke:var(--text2);stroke-width:1}
 .hit{fill:transparent;cursor:crosshair}
 .tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--rule);border-radius:6px;
-padding:6px 8px;font-size:12px;line-height:1.45;box-shadow:0 2px 8px rgba(0,0,0,.12);display:none;white-space:nowrap;z-index:2}
+padding:6px 8px;font-size:12px;line-height:1.5;box-shadow:0 2px 8px rgba(0,0,0,.12);display:none;z-index:2;
+width:max-content;max-width:min(520px,calc(100% - 16px))}
 details{margin-top:8px}summary{cursor:pointer;color:var(--text2);font-size:13px}
 .tbl{overflow-x:auto}
 table{border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;margin-top:6px}
@@ -298,7 +501,7 @@ document.querySelectorAll('.card').forEach(card=>{
     cur.setAttribute('x1',xs[i]);cur.setAttribute('x2',xs[i]);cur.setAttribute('visibility','visible');
     tip.innerHTML=tips[i];tip.style.display='block';
     const r=card.getBoundingClientRect(),w=tip.offsetWidth;
-    let left=e.clientX-r.left+14;if(left+w>r.width-8)left=e.clientX-r.left-w-14;
+    let left=e.clientX-r.left+14;if(left+w>r.width-8)left=Math.max(8,e.clientX-r.left-w-14);
     tip.style.left=left+'px';tip.style.top=(e.clientY-r.top+10)+'px';
   });
   hit.addEventListener('mouseleave',()=>{cur.setAttribute('visibility','hidden');tip.style.display='none'});
@@ -313,33 +516,41 @@ def page(run: Path, summary: dict) -> str:
     hosts = sorted({h["where"] + (f", {h['cpu']}, {h['cores']} cores" if h["cores"] else "")
                     for h in (run["host"] for run in meta.get("runs", []))})
     cards = []
-    for s in SKETCHES:
-        sid = s.id
-        if sid not in summary:
+    for f in FAMILIES:
+        cfgs = present(f, summary)
+        if not cfgs:
             continue
-        rows = summary[sid]
+        lead = f.lead
+        every = [r for _, _, rows in cfgs for r in rows]
+        chips = "".join(f'<span><i class="sw c{i}"></i><b>{html.escape(s.label)}</b> <code>{html.escape(s.config)}</code>'
+                        f' {html.escape(bound_summary(rows))}</span>' for i, s, rows in cfgs)
+        tables = "".join(f'<h3><i class="sw c{i}"></i> {html.escape(s.label)} <code>{html.escape(s.config)}</code></h3>'
+                         f'<div class="tbl">{table(s.id, rows)}</div>' for i, s, rows in cfgs)
         cards.append(
-            f'<section class="card"><h2>{html.escape(s.title)} <span style="font-weight:400;color:var(--text2)">'
-            f'{html.escape(s.config)}</span></h2>'
-            f'<p class="sub">y: {html.escape(s.metric)} · data: {html.escape(s.data_note)}<br>'
-            f'theory: {html.escape(s.theory_note)}<br>shaded: {html.escape(band_label(s))}</p>'
-            f'{chart(sid, rows)}<div class="tip"></div>'
-            f'<details><summary>Table</summary><div class="tbl">{table(sid, rows)}</div></details></section>')
+            f'<section class="card"><h2>{html.escape(f.title)}</h2>'
+            f'<p class="sub">y: {html.escape(lead.metric)} · data: {html.escape(lead.data_note)}<br>'
+            f'theory: {html.escape(theory_note(f, cfgs))}<br>shaded: {html.escape(band_label(lead.signed, every))}</p>'
+            f'<div class="cfgs">{chips}</div>'
+            f'{chart(f, cfgs)}<div class="tip"></div>'
+            f'<details><summary>Tables</summary>{tables}</details></section>')
     legend = ('<div class="legend">'
-              '<span><i class="sw" style="background:var(--band2)"></i>share of trials the bound covers</span>'
-              '<span><i class="sw" style="background:var(--median);height:2px"></i>median</span>'
+              '<span><i class="sw c0"></i><i class="sw c1"></i><i class="sw c2"></i>one color per config</span>'
+              '<span><i class="sw" style="background:var(--muted);opacity:.5"></i>share of trials the bound covers</span>'
+              '<span><i class="sw" style="background:var(--muted);height:2px"></i>median</span>'
               '<span><i class="sw" style="border-top:2px dashed var(--theory);height:0"></i>theory</span></div>')
+    shown = sum(1 for f in FAMILIES if present(f, summary))
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Sketch accuracy</title>
 <style>{CSS}</style></head><body><main>
 <h1>Sketch accuracy characterization</h1>
 <p class="meta">{html.escape(meta['date'])} · asap_sketchlib {html.escape(meta['asap_sketchlib'])} ·
-sketch-bench {html.escape(', '.join(sorted(set(meta['sketch_bench'].values()))))} · up to {trials} trials per point ·
-N = {ns[0]:,} … {ns[-1]:,}{''.join(f' · ran on {html.escape(h)}' for h in hosts)}</p>
-<p class="read">Each trial runs one sketch over a fresh stream and records one error value. At each N the shaded
-area holds the share of trials the theory speaks about (for example 95% when δ = 5%; 95% where there is no
-theory), and the line is the median. Dashed lines are the library's theoretical error: the shaded area should stay
-inside them. Each card says what its shaded area holds; hover a point for more quantiles.</p>
+sketch-bench {html.escape(', '.join(sorted(set(meta['sketch_bench'].values()))))} · {shown} sketches, {len(summary)} configs ·
+up to {trials} trials per point · N = {ns[0]:,} … {ns[-1]:,}{''.join(f' · ran on {html.escape(h)}' for h in hosts)}</p>
+<p class="read">Each trial runs one sketch over a fresh stream and records one error value. Each card draws one sketch
+at up to three configs that differ in one parameter, one color each. At each N a config's shaded area holds the
+share of trials its theory speaks about (for example 95% when δ = 5%; 95% where there is no theory), and its solid
+line is the median. Dashed lines are asap_sketchlib's own theoretical error (<code>SketchAnalytics::theoretical_error</code>),
+asked at each N: each shaded area should stay inside its own dashed lines. Hover a point for every config's quantiles.</p>
 {legend}
 <div class="grid-cards">{''.join(cards)}</div>
 </main><script>{JS}</script></body></html>
@@ -350,14 +561,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("run", type=Path)
     args = ap.parse_args()
-    summary = aggregate(args.run / "raw.jsonl")
+    meta = json.loads((args.run / "meta.json").read_text())
+    summary = aggregate(args.run / "raw.jsonl", meta)
     (args.run / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     (args.run / "index.html").write_text(page(args.run, summary))
     figs = args.run / "figures"
     figs.mkdir(exist_ok=True)
-    for s in SKETCHES:
-        if s.id in summary:
-            (figs / figure_name(s)).write_text(figure(s.id, summary[s.id]))
+    for f in FAMILIES:
+        cfgs = present(f, summary)
+        if cfgs:
+            (figs / f"{f.id}.svg").write_text(figure(f, cfgs))
     print(args.run / "index.html")
     print(figs)
 

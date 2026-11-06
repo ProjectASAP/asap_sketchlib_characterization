@@ -18,7 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from grid import BY_ID, SKETCHES, n_grid
+from grid import BY_FAMILY, BY_ID, SKETCHES, n_grid
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_BENCH = Path(os.environ.get("SKETCH_BENCH_DIR", HERE.parent / "sketch-bench"))
@@ -125,7 +125,8 @@ def main() -> int:
     ap.add_argument("--out", type=Path, help="run directory (default results/<asap_sketchlib sha>)")
     ap.add_argument("--bench-dir", type=Path, default=DEFAULT_BENCH)
     ap.add_argument("--binary", help="approxbench path (default <bench-dir>/target/release/approxbench)")
-    ap.add_argument("--sketches", default=",".join(s.id for s in SKETCHES))
+    ap.add_argument("--sketches", default=",".join(s.id for s in SKETCHES),
+                    help="comma-separated sketch ids and/or family names (a family runs its three configs)")
     ap.add_argument("--trials", type=int, default=256)
     ap.add_argument("--lg-min", type=int, default=8)
     ap.add_argument("--lg-max", type=int, default=20)
@@ -135,10 +136,12 @@ def main() -> int:
 
     binary = args.binary or str(args.bench_dir / "target/release/approxbench")
     args.out = args.out or run_dir(args.bench_dir)
-    ids = args.sketches.split(",")
-    unknown = [i for i in ids if i not in BY_ID]
+    asked = [i for i in args.sketches.split(",") if i]
+    unknown = [i for i in asked if i not in BY_ID and i not in BY_FAMILY]
     if unknown:
-        ap.error(f"unknown sketches {unknown}; known: {list(BY_ID)}")
+        ap.error(f"unknown sketches {unknown}; known families: {list(BY_FAMILY)}; ids: {list(BY_ID)}")
+    ids = list(dict.fromkeys(s for i in asked
+                             for s in ([c.id for c in BY_FAMILY[i].configs] if i in BY_FAMILY else [i])))
     ns = n_grid(args.lg_min, args.lg_max, args.ppo)
 
     args.out.mkdir(parents=True, exist_ok=True)
