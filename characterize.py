@@ -154,7 +154,6 @@ def main() -> int:
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "asap_sketchlib": sketchlib_version(args.bench_dir),
         "sketch_bench": dict.fromkeys(ids, git_sha(args.bench_dir)),
-        "binary": binary,
         "sketches": ids, "trials": {i: args.trials for i in ids}, "n": ns,
         "runs": [{
             "date": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -168,6 +167,7 @@ def main() -> int:
         old = json.loads(meta_path.read_text())
         if old["asap_sketchlib"] != meta["asap_sketchlib"]:
             ap.error(f"{args.out} measured asap_sketchlib {old['asap_sketchlib']}, this build links {meta['asap_sketchlib']}")
+        meta["date"] = old["date"]
         meta["sketch_bench"] = {**old.get("sketch_bench", {}), **meta["sketch_bench"]}
         old_trials = old["trials"] if isinstance(old["trials"], dict) else dict.fromkeys(old["sketches"], old["trials"])
         meta["trials"] = {**old_trials, **meta["trials"]}
