@@ -310,6 +310,8 @@ def page(run: Path, summary: dict) -> str:
     meta = json.loads((run / "meta.json").read_text())
     ns = sorted({r["n"] for rows in summary.values() for r in rows})
     trials = max(r["trials"] for rows in summary.values() for r in rows)
+    hosts = sorted({h["where"] + (f", {h['cpu']}, {h['cores']} cores" if h["cores"] else "")
+                    for h in (run["host"] for run in meta.get("runs", []))})
     cards = []
     for s in SKETCHES:
         sid = s.id
@@ -333,7 +335,7 @@ def page(run: Path, summary: dict) -> str:
 <h1>Sketch accuracy characterization</h1>
 <p class="meta">{html.escape(meta['date'])} · asap_sketchlib {html.escape(meta['asap_sketchlib'])} ·
 sketch-bench {html.escape(', '.join(sorted(set(meta['sketch_bench'].values()))))} · up to {trials} trials per point ·
-N = {ns[0]:,} … {ns[-1]:,}</p>
+N = {ns[0]:,} … {ns[-1]:,}{''.join(f' · ran on {html.escape(h)}' for h in hosts)}</p>
 <p class="read">Each trial runs one sketch over a fresh stream and records one error value. At each N the shaded
 area holds the share of trials the theory speaks about (for example 95% when δ = 5%; 95% where there is no
 theory), and the line is the median. Dashed lines are the library's theoretical error: the shaded area should stay

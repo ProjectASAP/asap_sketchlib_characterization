@@ -32,6 +32,7 @@ def main() -> int:
         meta["sketch_bench"] = {**meta.get("sketch_bench", {}), **m.get("sketch_bench", {})}
         meta["trials"] = {**meta.get("trials", {}), **m.get("trials", {})}
         meta["n"] = sorted(set(meta.get("n", [])) | set(m.get("n", [])))
+        meta["runs"] = meta.get("runs", []) + m.get("runs", [])
     order = [s.id for s in SKETCHES]
     meta["sketches"] = [i for i in order if i in meta["trials"]]
 

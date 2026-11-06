@@ -10,6 +10,7 @@ import concurrent.futures as cf
 import datetime
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -68,6 +69,29 @@ def git_sha(path: Path) -> str:
     return r.stdout.strip() or "unknown"
 
 
+def host(bench_dir: Path) -> dict:
+    """Where this invocation runs: machine, OS and the toolchain that built approxbench."""
+    def sh(*cmd, cwd=None):
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+        return r.stdout.strip()
+    if platform.system() == "Darwin":
+        cpu = sh("sysctl", "-n", "machdep.cpu.brand_string")
+        mem = int(sh("sysctl", "-n", "hw.memsize") or 0)
+    else:
+        info = Path("/proc/cpuinfo").read_text()
+        cpu = re.search(r"model name\s*:\s*(.+)", info).group(1).strip()
+        mem = int(re.search(r"MemTotal:\s*(\d+)", Path("/proc/meminfo").read_text()).group(1)) * 1024
+    if os.environ.get("GITHUB_ACTIONS"):
+        where = f"GitHub Actions {os.environ.get('ImageOS', '')} {os.environ.get('ImageVersion', '')}".strip()
+    else:
+        where = "local"
+    return {
+        "where": where, "cpu": cpu, "cores": os.cpu_count(), "memory_gib": round(mem / 2**30, 1),
+        "os": platform.platform(), "rustc": sh("rustc", "-V", cwd=bench_dir),
+        "rustflags": os.environ.get("RUSTFLAGS", ""),
+    }
+
+
 def run_trial(binary: str, sketch_id: str, n: int, trial: int, tmp: str) -> dict:
     s = BY_ID[sketch_id]
     argv, spec = s.data(n, trial)
@@ -82,6 +106,8 @@ def run_trial(binary: str, sketch_id: str, n: int, trial: int, tmp: str) -> dict
            "--config", config, "--comparator", s.comparator, *argv, *s.extra,
            "--metrics", "accuracy", "--operations", "query",
            "--runs", "1", "--warmup-runs", "0", "--report", report]
+    if s.trial_mode:
+        cmd += ["--trials", "1", "--trial-start", str(trial), "--trial-mode", s.trial_mode]
     env = dict(os.environ, BENCH_WARMUP_SECS="0")
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
     if r.returncode != 0:
@@ -130,6 +156,11 @@ def main() -> int:
         "sketch_bench": dict.fromkeys(ids, git_sha(args.bench_dir)),
         "binary": binary,
         "sketches": ids, "trials": {i: args.trials for i in ids}, "n": ns,
+        "runs": [{
+            "date": datetime.datetime.now().isoformat(timespec="seconds"),
+            "sketches": ids, "trials": args.trials, "sketch_bench": git_sha(args.bench_dir),
+            "host": host(args.bench_dir), "command": ["characterize.py", *sys.argv[1:]],
+        }],
     }
     meta_path = args.out / "meta.json"
     if meta_path.exists():
@@ -142,6 +173,7 @@ def main() -> int:
         meta["trials"] = {**old_trials, **meta["trials"]}
         meta["sketches"] = old["sketches"] + [i for i in ids if i not in old["sketches"]]
         meta["n"] = sorted(set(old["n"]) | set(ns))
+        meta["runs"] = old.get("runs", []) + meta["runs"]
     meta_path.write_text(json.dumps(meta, indent=2) + "\n")
     print(f"{len(jobs)} trials to run ({len(done)} already in {raw_path})", flush=True)
 

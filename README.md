@@ -4,6 +4,7 @@ Error distributions of `asap_sketchlib` sketches over many independent trials, d
 
 Each trial is one `approxbench sketchbench` run from [sketch-bench](../sketch-bench) at one stream length N.
 Trials differ only in their data, so every trial sees a fresh key set.
+Hydra rows get theirs from sketch-bench's `--trial-mode fresh`, which reseeds the data and prefixes the label strings per trial.
 At each N the report shades the share of trials the theoretical bound covers (95% where there is no bound) and draws the median.
 The shaded area should stay inside the dashed theory lines.
 
@@ -19,7 +20,7 @@ python3 cms_point_query.py
 
 Each run directory is `results/<sha>`, the short commit of the `asap_sketchlib` that sketch-bench pins.
 A crates.io release resolves to its tag's commit.
-`meta.json` records the sketch-bench commit that ran each sketch.
+`meta.json` records the sketch-bench commit that ran each sketch, and under `runs` each invocation's machine, OS, rustc, `RUSTFLAGS` and command.
 
 `characterize.py` appends to `raw.jsonl` and skips trials already there, so it resumes after an interruption.
 Options: `--sketches hll,kll`, `--lg-min/--lg-max` (N from 2^lg-min to 2^lg-max), `--ppo` (points per octave), `--workers`.

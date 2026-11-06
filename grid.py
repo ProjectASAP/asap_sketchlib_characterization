@@ -41,6 +41,8 @@ class Sketch:
     cover: float = 0.95
     # Adds seed=<trial + 1> to the config.
     seeded: bool = False
+    # sketch-bench --trial-mode for trial t; data() then gives trial 0's spec.
+    trial_mode: str | None = None
     extra: tuple[str, ...] = ()
 
 
@@ -100,7 +102,10 @@ def keyed_weights(n: int, trial: int):
 
 
 def hydra_records(value_type: str):
-    """Hydra's records: label key1 uniform over 200, label key2 Zipf over 50, a Zipf value."""
+    """Hydra's records: label key1 uniform over 200, label key2 Zipf over 50, a Zipf value.
+
+    Trial 0's spec; --trial-mode fresh reseeds it and prefixes the labels per trial.
+    """
     def data(n: int, trial: int):
         spec = (
             "column_num: 3\n"
@@ -112,19 +117,19 @@ def hydra_records(value_type: str):
             "      kind: uniform\n"
             "      lower_bound: 0.0\n"
             "      upper_bound: 200.0\n"
-            f"      seed: {3 * trial + 1}\n"
+            "      seed: 1\n"
             "  - data_type: string\n"
             "    distribution:\n"
             "      kind: zipf\n"
             "      skewness: 1.1\n"
             "      population_size: 50\n"
-            f"      seed: {3 * trial + 2}\n"
+            "      seed: 2\n"
             f"  - data_type: {value_type}\n"
             "    distribution:\n"
             "      kind: zipf\n"
             "      skewness: 1.2\n"
             "      population_size: 1000\n"
-            f"      seed: {3 * trial + 3}\n"
+            "      seed: 3\n"
         )
         return ["--dtype", value_type], spec
     return data
@@ -186,7 +191,7 @@ TOPK = 32
 UM_KEYS, UM_HEAP, UM_LAYERS = 100_000, 64, 14
 HYDRA_GRID = "rows=3 cols=1024"
 HYDRA_DATA_NOTE = ("label key1 uniform over 200 values, key2 Zipf(1.1) over 50, value Zipf(1.2) over 1000; "
-                   "grouped by key1, new draws per trial")
+                   "grouped by key1, new draws and new label strings per trial (--trial-mode fresh)")
 TOPK_NOTE = f"Zipf(s = {ZIPF_SKEW}) over {ZIPF_KEYS} keys, key set shifted per trial"
 UM_NOTE = (f"Zipf(s = {ZIPF_SKEW}) u64 keys over {UM_KEYS:,}, each weighted uniform in [1, 100], "
            "key set shifted per trial")
@@ -306,7 +311,7 @@ SKETCHES = [
         id=variant, title=title, variant=variant, config=config, comparator=comparator,
         data=hydra_records(vtype), data_note=HYDRA_DATA_NOTE,
         value=lambda acc, n: acc["err_mean"], metric=f"mean over subpopulations of {what}",
-        signed=False, seeded=variant.startswith("hydra-kll"),
+        signed=False, seeded=variant.startswith("hydra-kll"), trial_mode="fresh",
         theory_note="none drawn: the bound depends on each subpopulation's N_Q, D_Q or ‖f_Q‖₂",
     ) for variant, title, config, comparator, vtype, what in (
         ("hydra-cms", "Hydra over Count-Min", f"{HYDRA_GRID} cell_rows=3 cell_cols=1024",
