@@ -673,6 +673,752 @@
         "--sketches",
         "hydra-univmon-sum"
       ]
+    },
+    {
+      "date": "2026-11-06T15:40:43",
+      "sketches": [
+        "hll-lgk14",
+        "kll-k200",
+        "kll-cdf-k200",
+        "kll-dynamic-k200",
+        "dd-a0.01",
+        "cms-w1024",
+        "cs-w1024",
+        "hll-ertl-lgk14",
+        "kmv-k4096",
+        "space-saving-m1024",
+        "cms-heap-topk-w1024",
+        "cs-heap-topk-w1024",
+        "univmon-topk-w1024",
+        "univmon-cardinality-k64",
+        "univmon-l1-norm-w1024",
+        "univmon-l2-norm-w1024",
+        "univmon-entropy-w1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hll,kll,kll-cdf,kll-dynamic,dd,cms,cs,hll-ertl,kmv,space-saving,cms-heap-topk,cs-heap-topk,univmon-topk,univmon-cardinality,univmon-l1-norm,univmon-l2-norm,univmon-entropy"
+      ]
+    },
+    {
+      "date": "2026-11-06T16:17:28",
+      "sketches": [
+        "hll-lgk14",
+        "kll-k200",
+        "kll-cdf-k200",
+        "kll-dynamic-k200",
+        "dd-a0.01",
+        "cms-w1024",
+        "cs-w1024",
+        "hll-ertl-lgk14",
+        "kmv-k4096",
+        "space-saving-m1024",
+        "cms-heap-topk-w1024",
+        "cs-heap-topk-w1024",
+        "univmon-topk-w1024",
+        "univmon-cardinality-k64",
+        "univmon-l1-norm-w1024",
+        "univmon-l2-norm-w1024",
+        "univmon-entropy-w1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--sketches",
+        "hll,kll,kll-cdf,kll-dynamic,dd,cms,cs,hll-ertl,kmv,space-saving,cms-heap-topk,cs-heap-topk,univmon-topk,univmon-cardinality,univmon-l1-norm,univmon-l2-norm,univmon-entropy"
+      ]
+    },
+    {
+      "date": "2026-11-06T16:57:07",
+      "sketches": [
+        "hydra-cms-cw1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-cms"
+      ]
+    },
+    {
+      "date": "2026-11-06T17:09:57",
+      "sketches": [
+        "hydra-cms-cw1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--sketches",
+        "hydra-cms"
+      ]
+    },
+    {
+      "date": "2026-11-06T17:30:11",
+      "sketches": [
+        "hydra-cs-cw1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-cs"
+      ]
+    },
+    {
+      "date": "2026-11-06T17:43:13",
+      "sketches": [
+        "hydra-cs-cw1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--sketches",
+        "hydra-cs"
+      ]
+    },
+    {
+      "date": "2026-11-06T18:03:41",
+      "sketches": [
+        "hydra-hll-w1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-hll"
+      ]
+    },
+    {
+      "date": "2026-11-06T18:14:12",
+      "sketches": [
+        "hydra-hll-w1024"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--sketches",
+        "hydra-hll"
+      ]
+    },
+    {
+      "date": "2026-11-06T18:36:59",
+      "sketches": [
+        "hydra-kll-ck200"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-kll"
+      ]
+    },
+    {
+      "date": "2026-11-06T18:47:29",
+      "sketches": [
+        "hydra-kll-ck200"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--sketches",
+        "hydra-kll"
+      ]
+    },
+    {
+      "date": "2026-11-06T19:00:45",
+      "sketches": [
+        "hydra-kll-cdf-ck200"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-kll-cdf"
+      ]
+    },
+    {
+      "date": "2026-11-06T19:11:13",
+      "sketches": [
+        "hydra-kll-cdf-ck200"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--sketches",
+        "hydra-kll-cdf"
+      ]
+    },
+    {
+      "date": "2026-11-06T19:24:27",
+      "sketches": [
+        "hydra-univmon-cardinality-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-univmon-cardinality"
+      ]
+    },
+    {
+      "date": "2026-11-06T20:12:56",
+      "sketches": [
+        "hydra-univmon-cardinality-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--workers",
+        "32",
+        "--sketches",
+        "hydra-univmon-cardinality"
+      ]
+    },
+    {
+      "date": "2026-11-06T21:53:22",
+      "sketches": [
+        "hydra-univmon-l1-norm-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-univmon-l1-norm"
+      ]
+    },
+    {
+      "date": "2026-11-06T22:41:48",
+      "sketches": [
+        "hydra-univmon-l1-norm-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--workers",
+        "32",
+        "--sketches",
+        "hydra-univmon-l1-norm"
+      ]
+    },
+    {
+      "date": "2026-11-07T00:22:11",
+      "sketches": [
+        "hydra-univmon-l2-norm-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-univmon-l2-norm"
+      ]
+    },
+    {
+      "date": "2026-11-07T01:10:39",
+      "sketches": [
+        "hydra-univmon-l2-norm-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--workers",
+        "32",
+        "--sketches",
+        "hydra-univmon-l2-norm"
+      ]
+    },
+    {
+      "date": "2026-11-07T02:51:06",
+      "sketches": [
+        "hydra-univmon-entropy-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-univmon-entropy"
+      ]
+    },
+    {
+      "date": "2026-11-07T03:39:45",
+      "sketches": [
+        "hydra-univmon-entropy-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--workers",
+        "32",
+        "--sketches",
+        "hydra-univmon-entropy"
+      ]
+    },
+    {
+      "date": "2026-11-07T05:20:25",
+      "sketches": [
+        "hydra-univmon-sum-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 2,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "2",
+        "--sketches",
+        "hydra-univmon-sum"
+      ]
+    },
+    {
+      "date": "2026-11-07T06:08:07",
+      "sketches": [
+        "hydra-univmon-sum-cw256"
+      ],
+      "trials": 1024,
+      "merge_shards": 8,
+      "sketch_bench": "68f6514",
+      "host": {
+        "where": "local",
+        "cpu": "Intel(R) Xeon(R) CPU E5-2660 v2 @ 2.20GHz",
+        "cores": 40,
+        "memory_gib": 125.8,
+        "os": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+        "rustflags": ""
+      },
+      "command": [
+        "characterize.py",
+        "--trials",
+        "1024",
+        "--merge-shards",
+        "8",
+        "--workers",
+        "32",
+        "--sketches",
+        "hydra-univmon-sum"
+      ]
     }
-  ]
+  ],
+  "merge": {
+    "hll-lgk14": {
+      "2": 1024,
+      "8": 1024
+    },
+    "kll-k200": {
+      "2": 1024,
+      "8": 1024
+    },
+    "kll-cdf-k200": {
+      "2": 1024,
+      "8": 1024
+    },
+    "kll-dynamic-k200": {
+      "2": 1024,
+      "8": 1024
+    },
+    "dd-a0.01": {
+      "2": 1024,
+      "8": 1024
+    },
+    "cms-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "cs-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hll-ertl-lgk14": {
+      "2": 1024,
+      "8": 1024
+    },
+    "kmv-k4096": {
+      "2": 1024,
+      "8": 1024
+    },
+    "space-saving-m1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "cms-heap-topk-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "cs-heap-topk-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "univmon-topk-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "univmon-cardinality-k64": {
+      "2": 1024,
+      "8": 1024
+    },
+    "univmon-l1-norm-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "univmon-l2-norm-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "univmon-entropy-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-cms-cw1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-cs-cw1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-hll-w1024": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-kll-ck200": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-kll-cdf-ck200": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-univmon-cardinality-cw256": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-univmon-l1-norm-cw256": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-univmon-l2-norm-cw256": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-univmon-entropy-cw256": {
+      "2": 1024,
+      "8": 1024
+    },
+    "hydra-univmon-sum-cw256": {
+      "2": 1024,
+      "8": 1024
+    }
+  }
 }
