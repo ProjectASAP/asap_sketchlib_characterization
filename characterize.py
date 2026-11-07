@@ -2,7 +2,8 @@
 """Run independent trials of each sketch through approxbench, one error value per trial.
 
 Appends to <out>/raw.jsonl and skips (sketch, n, trial) rows already there, so an
-interrupted run resumes.
+interrupted run resumes. With --merge-shards S each trial instead splits its stream into S
+shards, merges the S sketches and scores the merged one; those trials go to <out>/merge.jsonl.
 """
 
 import argparse
@@ -18,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from grid import BY_FAMILY, BY_ID, SKETCHES, n_grid
+from grid import BY_FAMILY, BY_ID, SKETCHES, UNMERGEABLE, n_grid
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_BENCH = Path(os.environ.get("SKETCH_BENCH_DIR", HERE.parent / "sketch-bench"))
@@ -92,10 +93,10 @@ def host(bench_dir: Path) -> dict:
     }
 
 
-def run_trial(binary: str, sketch_id: str, n: int, trial: int, tmp: str) -> dict:
+def run_trial(binary: str, sketch_id: str, n: int, trial: int, tmp: str, shards: int = 0) -> dict:
     s = BY_ID[sketch_id]
     argv, spec = s.data(n, trial)
-    stem = os.path.join(tmp, f"{sketch_id}_{n}_{trial}")
+    stem = os.path.join(tmp, f"{sketch_id}_{n}_{trial}_{shards}")
     if spec is not None:
         with open(stem + ".yaml", "w") as f:
             f.write(spec)
@@ -104,8 +105,10 @@ def run_trial(binary: str, sketch_id: str, n: int, trial: int, tmp: str) -> dict
     config = f"{s.config} seed={trial + 1}" if s.seeded else s.config
     cmd = [binary, "sketchbench", "--variant", s.variant, "--library", "lib",
            "--config", config, "--comparator", s.comparator, *argv, *s.extra,
-           "--metrics", "accuracy", "--operations", "query",
+           "--metrics", "accuracy", "--operations", "merge" if shards else "query",
            "--runs", "1", "--warmup-runs", "0", "--report", report]
+    if shards:
+        cmd += ["--merge-shards", str(shards), "--merge-split", "contiguous"]
     if s.trial_mode:
         cmd += ["--trials", "1", "--trial-start", str(trial), "--trial-mode", s.trial_mode]
     env = dict(os.environ, BENCH_WARMUP_SECS="0")
@@ -117,7 +120,8 @@ def run_trial(binary: str, sketch_id: str, n: int, trial: int, tmp: str) -> dict
     for p in (report, stem + ".yaml"):
         if os.path.exists(p):
             os.remove(p)
-    return {"sketch": sketch_id, "n": n, "trial": trial, "value": s.value(acc, n), "acc": acc}
+    out = {"sketch": sketch_id, "n": n, "trial": trial, "value": s.value(acc, n), "acc": acc}
+    return {**out, "shards": shards} if shards else out
 
 
 def main() -> int:
@@ -132,6 +136,9 @@ def main() -> int:
     ap.add_argument("--lg-max", type=int, default=20)
     ap.add_argument("--ppo", type=int, default=2, help="points per octave of N")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
+    ap.add_argument("--merge-shards", type=int, default=0,
+                    help="merge S shards per trial instead of one sketch; a family name then runs its "
+                         "middle config, and the trials go to merge.jsonl")
     args = ap.parse_args()
 
     binary = args.binary or str(args.bench_dir / "target/release/approxbench")
@@ -140,30 +147,47 @@ def main() -> int:
     unknown = [i for i in asked if i not in BY_ID and i not in BY_FAMILY]
     if unknown:
         ap.error(f"unknown sketches {unknown}; known families: {list(BY_FAMILY)}; ids: {list(BY_ID)}")
-    ids = list(dict.fromkeys(s for i in asked
-                             for s in ([c.id for c in BY_FAMILY[i].configs] if i in BY_FAMILY else [i])))
+    S = args.merge_shards
+    if S == 1 or S < 0:
+        ap.error("--merge-shards takes 2 or more (0 runs the unmerged sketch)")
+
+    def expand(i):
+        if i not in BY_FAMILY:
+            return [i]
+        f = BY_FAMILY[i]
+        return ([f.merged.id] if f.merged else []) if S else [c.id for c in f.configs]
+    ids = list(dict.fromkeys(s for i in asked for s in expand(i)))
+    if S:
+        cant = [i for i in ids if BY_ID[i].family in UNMERGEABLE]
+        if cant:
+            ap.error(f"{cant} have no merge in sketch-bench")
     ns = n_grid(args.lg_min, args.lg_max, args.ppo)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    raw_path = args.out / "raw.jsonl"
+    raw_path = args.out / ("merge.jsonl" if S else "raw.jsonl")
     done = set()
     if raw_path.exists():
         for line in raw_path.open():
             r = json.loads(line)
-            done.add((r["sketch"], r["n"], r["trial"]))
+            if r.get("shards", 0) == S:
+                done.add((r["sketch"], r["n"], r["trial"]))
     jobs = [(i, n, t) for i in ids for n in ns for t in range(args.trials) if (i, n, t) not in done]
 
     meta = {
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "asap_sketchlib": sketchlib_version(args.bench_dir),
         "sketch_bench": dict.fromkeys(ids, git_sha(args.bench_dir)),
-        "sketches": ids, "trials": {i: args.trials for i in ids}, "n": ns,
+        "sketches": [] if S else ids, "trials": {} if S else {i: args.trials for i in ids}, "n": ns,
         "runs": [{
             "date": datetime.datetime.now().isoformat(timespec="seconds"),
-            "sketches": ids, "trials": args.trials, "sketch_bench": git_sha(args.bench_dir),
+            "sketches": ids, "trials": args.trials, **({"merge_shards": S} if S else {}),
+            "sketch_bench": git_sha(args.bench_dir),
             "host": host(args.bench_dir), "command": ["characterize.py", *sys.argv[1:]],
         }],
     }
+    if S:
+        # Merged trials per config and shard count; trials/sketches stay the unmerged ones.
+        meta["merge"] = {i: {str(S): args.trials} for i in ids}
     meta_path = args.out / "meta.json"
     if meta_path.exists():
         # A run directory holds one asap_sketchlib; later invocations add sketches to it.
@@ -174,9 +198,14 @@ def main() -> int:
         meta["sketch_bench"] = {**old.get("sketch_bench", {}), **meta["sketch_bench"]}
         old_trials = old["trials"] if isinstance(old["trials"], dict) else dict.fromkeys(old["sketches"], old["trials"])
         meta["trials"] = {**old_trials, **meta["trials"]}
-        meta["sketches"] = old["sketches"] + [i for i in ids if i not in old["sketches"]]
+        meta["sketches"] = old["sketches"] + [i for i in meta["sketches"] if i not in old["sketches"]]
         meta["n"] = sorted(set(old["n"]) | set(ns))
         meta["runs"] = old.get("runs", []) + meta["runs"]
+        merge = {i: dict(v) for i, v in old.get("merge", {}).items()}
+        for i, v in meta.get("merge", {}).items():
+            merge.setdefault(i, {}).update(v)
+        if merge:
+            meta["merge"] = merge
     meta_path.write_text(json.dumps(meta, indent=2) + "\n")
     print(f"{len(jobs)} trials to run ({len(done)} already in {raw_path})", flush=True)
 
@@ -184,7 +213,7 @@ def main() -> int:
     start = time.time()
     with tempfile.TemporaryDirectory() as tmp, raw_path.open("a") as raw, \
             cf.ThreadPoolExecutor(args.workers) as pool:
-        futures = {pool.submit(run_trial, binary, i, n, t, tmp): (i, n, t) for i, n, t in jobs}
+        futures = {pool.submit(run_trial, binary, i, n, t, tmp, S): (i, n, t) for i, n, t in jobs}
         step = max(1, len(jobs) // 20)
         for k, fut in enumerate(cf.as_completed(futures), 1):
             try:

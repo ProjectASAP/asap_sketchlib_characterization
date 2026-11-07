@@ -17,6 +17,8 @@ Needs a built `approxbench` in `$SKETCH_BENCH_DIR/target/release` (default `../s
 
 ```bash
 python3 characterize.py --trials 1024
+python3 characterize.py --trials 1024 --merge-shards 2
+python3 characterize.py --trials 1024 --merge-shards 8
 python3 report.py results/<sha>
 python3 cms_point_query.py
 ```
@@ -27,6 +29,12 @@ A crates.io release resolves to its tag's commit.
 
 `characterize.py` appends to `raw.jsonl` and skips trials already there, so it resumes after an interruption.
 Options: `--sketches` (sketch ids such as `cms-w1024`, or family names such as `cms` for all three configs), `--lg-min/--lg-max` (N from 2^lg-min to 2^lg-max), `--ppo` (points per octave), `--workers`.
+
+`--merge-shards S` runs the same trials through sketch-bench's merge instead: each trial's stream is cut into S contiguous shards, one sketch is built per shard, the S sketches are merged, and the merged sketch is scored against the whole stream.
+A family name then means its middle config, and the trials go to `merge.jsonl`.
+The report draws `figures/<family>-merge.svg` for each family: the unmerged config and its merges from 2 and 8 shards, against the unmerged sketch's bound, with the share of trials whose merged error equals the unmerged one (always, for a sketch that merges exactly).
+HyperLogLog HIP has no merge in sketch-bench, so it has no merge figure.
+Hydra over UnivMon holds one grid per shard, about 0.27 GB per shard at N = 2^20, so its 8-shard runs need `--workers` low enough for memory.
 
 ## Run on GitHub
 
@@ -43,7 +51,7 @@ Inputs: `trials`, `cms_trials`, `sketches` (ids or family names; empty runs all;
 | `theory/` | a small Rust program that answers `asap_sketchlib`'s `theoretical_error` for the bounds `grid.py` names |
 | `characterize.py` | runs the trials in parallel and writes `raw.jsonl` and `meta.json` |
 | `merge.py` | merges run directories written by separate jobs |
-| `report.py` | asks `theory/` for each bound, and writes `summary.json` (quantiles and bound per N), `index.html` and `figures/<family>.svg`, one standalone vector figure per family with its configs overlaid |
+| `report.py` | asks `theory/` for each bound, and writes `summary.json` (quantiles and bound per N), `index.html` and `figures/<family>.svg`, one standalone vector figure per family with its configs overlaid; with merge trials also `merge_summary.json` and `figures/<family>-merge.svg` |
 | `cms_point_query.py` | Count-Min in DataSketches' setup (w = 272, d = 3, one stream, a new hash per trial), one row per implementation; writes `cms_point_query.jsonl` and `figures/cms_point_query.svg` |
 | `reference_datasketches_cms_point_query.tsv` | DataSketches' published CMS point-query results, drawn as a reference row |
 | `results/<sha>/` | the runs against one `asap_sketchlib` commit |

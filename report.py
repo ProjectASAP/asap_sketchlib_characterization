@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Aggregate <run>/raw.jsonl into per-N quantiles across trials and write <run>/summary.json,
 <run>/index.html and one standalone SVG per sketch family in <run>/figures/<family>.svg.
+If <run>/merge.jsonl exists, the merged trials go to <run>/merge_summary.json and one more SVG
+per family, <run>/figures/<family>-merge.svg.
 
 The theory lines are asap_sketchlib's own `theoretical_error`, asked through theory/
 at each N with that N's data (such as the distinct count), so a bound that depends on
@@ -16,7 +18,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-from grid import BY_ID, FAMILIES, GAUSS_RANKS, SKETCHES
+from grid import BY_ID, FAMILIES, GAUSS_RANKS, MERGE_SHARDS, SKETCHES
 
 THEORY = Path(__file__).resolve().parent / "theory"
 # Share of a Gaussian within ±2σ: what ±2 standard errors hold.
@@ -133,21 +135,68 @@ def aggregate(raw_path: Path, meta: dict) -> dict:
             if t and t["epsilon"] > 0 and t["metric"] != s.bound.metric:
                 raise SystemExit(f"{sid}: asap_sketchlib bounds {s.bound.statistic} in {t['metric']}, "
                                  f"the figure plots {s.bound.metric}")
-            lines, c = theory_lines(s, t)
-            v = sorted(by_n[n])
-            o = outside(s, lines, v)
-            band = ([quantile(v, (1 - c) / 2), quantile(v, (1 + c) / 2)] if s.signed
-                    else [v[0], quantile(v, c)])
-            rows.append({
-                "n": n, "trials": len(v), "min": v[0], "max": v[-1],
-                "mean": sum(v) / len(v),
-                "q": [quantile(v, p) for p in GAUSS_RANKS],
-                "band": band, "cover": c,
-                "theory": t, "lines": lines,
-                "outside_label": o[0] if o else None,
-                "outside": o[1] if o else None,
-            })
+            rows.append(make_row(s, n, by_n[n], t))
         out[sid] = rows
+    return out
+
+
+def make_row(s, n: int, values: list[float], t: dict | None) -> dict:
+    """One N of one config: quantiles across trials, the band its bound speaks about, and the bound."""
+    lines, c = theory_lines(s, t)
+    v = sorted(values)
+    o = outside(s, lines, v)
+    band = ([quantile(v, (1 - c) / 2), quantile(v, (1 + c) / 2)] if s.signed
+            else [v[0], quantile(v, c)])
+    return {
+        "n": n, "trials": len(v), "min": v[0], "max": v[-1],
+        "mean": sum(v) / len(v),
+        "q": [quantile(v, p) for p in GAUSS_RANKS],
+        "band": band, "cover": c,
+        "theory": t, "lines": lines,
+        "outside_label": o[0] if o else None,
+        "outside": o[1] if o else None,
+    }
+
+
+def aggregate_merge(run: Path, summary: dict) -> dict:
+    """merge.jsonl as {id: {shards: rows}}.
+
+    Each N is held to the unmerged sketch's bound: merging the shards should answer like one
+    sketch over the whole stream. "same" is the share of trials whose merged error equals the
+    unmerged trial's on the same data, which a sketch that merges exactly keeps at 1.
+    """
+    path = run / "merge.jsonl"
+    if not path.exists():
+        return {}
+    merged = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))  # id -> S -> N -> trial -> value
+    for line in path.open():
+        r = json.loads(line)
+        if r["sketch"] not in BY_ID:
+            raise SystemExit(f"{path} has sketch id {r['sketch']} grid.py does not know")
+        merged[r["sketch"]][r["shards"]][r["n"]][r["trial"]] = r["value"]
+    single = defaultdict(dict)  # (id, N) -> trial -> value
+    for line in (run / "raw.jsonl").open():
+        r = json.loads(line)
+        if r["sketch"] in merged:
+            single[(r["sketch"], r["n"])][r["trial"]] = r["value"]
+    out = {}
+    for sid, by_shards in merged.items():
+        s = BY_ID[sid]
+        theory = {r["n"]: r["theory"] for r in summary.get(sid, [])}
+        out[sid] = {}
+        for shards in sorted(by_shards):
+            rows = []
+            for n in sorted(by_shards[shards]):
+                trials = by_shards[shards][n]
+                row = make_row(s, n, list(trials.values()), theory.get(n))
+                base = single.get((sid, n), {})
+                paired = [t for t in trials if t in base]
+                row["paired"] = len(paired)
+                row["same"] = sum(trials[t] == base[t] for t in paired) / len(paired) if paired else None
+                # The bound is drawn once, with the unmerged sketch.
+                row["lines"] = []
+                rows.append(row)
+            out[sid][str(shards)] = rows
     return out
 
 
@@ -163,6 +212,41 @@ OFF_SCALE = 8
 def present(f, summary: dict) -> list[tuple[int, object, list[dict]]]:
     """The family's configs that have trials, each with its color index."""
     return [(i, s, summary[s.id]) for i, s in enumerate(f.configs) if s.id in summary]
+
+
+class View:
+    """One curve of a merge figure, standing in for a Sketch where a figure only needs its names."""
+
+    def __init__(self, s, label: str, legend: str, tlabel: str | None = None):
+        self.id, self.config, self.label, self.legend = s.id, s.config, label, legend
+        self.tlabel = tlabel or label
+
+
+def same_text(rows: list[dict]) -> str:
+    paired = sum(r["paired"] for r in rows)
+    if not paired:
+        return "no unmerged trials to compare"
+    same = sum(r["same"] * r["paired"] for r in rows) / paired
+    if same == 1:
+        return "identical to one sketch in every trial"
+    return f"identical to one sketch in {same:.1%} of trials"
+
+
+def merge_present(f, summary: dict, merged: dict) -> list[tuple[int, object, list[dict]]]:
+    """The family's merge figure: its middle config unmerged, then merged from each shard count."""
+    s = f.merged
+    if s is None or s.id not in merged or s.id not in summary:
+        return []
+    cfgs = [(0, View(s, "one sketch", f"one sketch · {bound_summary(summary[s.id])}", "bound"), summary[s.id])]
+    for k, shards in enumerate(MERGE_SHARDS, 1):
+        rows = merged[s.id].get(str(shards))
+        if rows:
+            cfgs.append((k, View(s, f"{shards} shards", f"{shards} shards merged · {same_text(rows)}"), rows))
+    return cfgs if len(cfgs) > 1 else []
+
+
+MERGE_NOTE = (f"each trial's stream cut into {' or '.join(map(str, MERGE_SHARDS))} contiguous shards, one sketch "
+              "per shard, merged into one and scored against the whole stream; one sketch is the same trials unmerged")
 
 
 def band_label(signed: bool, rows: list[dict]) -> str:
@@ -311,9 +395,9 @@ def plot(f, cfgs) -> tuple[list[str], list[int], list[float]]:
             if label != first:
                 continue
             if runs:
-                labels.append([py(runs[-1][-1][1]) + 4, i, s.label + (" ↑" if off else "")])
+                labels.append([py(runs[-1][-1][1]) + 4, i, getattr(s, "tlabel", s.label) + (" ↑" if off else "")])
             elif off:
-                labels.append([MT + 8, i, f"{s.label} ↑"])
+                labels.append([MT + 8, i, f"{getattr(s, 'tlabel', s.label)} ↑"])
     # Keep the right-edge labels at least a line apart, in their order.
     labels.sort()
     for k in range(1, len(labels)):
@@ -323,9 +407,9 @@ def plot(f, cfgs) -> tuple[list[str], list[int], list[float]]:
     return parts, ns, [xof[n] for n in ns]
 
 
-def chart(f, cfgs) -> str:
+def chart(f, cfgs, title: str | None = None) -> str:
     body, ns, xs = plot(f, cfgs)
-    parts = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(f.title)} error quantiles vs N">',
+    parts = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(title or f.title)} error quantiles vs N">',
              *body]
     tips = []
     for n in ns:
@@ -342,6 +426,8 @@ def chart(f, cfgs) -> str:
                 text += f" · ε {fmt(r['theory']['epsilon'])}"
             if r["outside"] is not None:
                 text += f" · {r['outside_label']}: {r['outside']:.2%}"
+            if r.get("same") is not None:
+                text += f" · identical to one sketch: {r['same']:.1%}"
             lines.append(text)
         tips.append("<br>".join(lines))
     parts.append(f'<line class="cursor" x1="0" x2="0" y1="{MT}" y2="{H - MB}" visibility="hidden"/>')
@@ -376,19 +462,21 @@ def wrap(text: str, width: float, char_px: float) -> list[str]:
     return lines + [cur]
 
 
-def figure(f, cfgs) -> str:
-    """One family as a standalone SVG: title, axis labels, legend, no script."""
+def figure(f, cfgs, title: str | None = None, note: str | None = None) -> str:
+    """One family as a standalone SVG: title, axis labels, legend, no script.
+
+    `note` replaces the line naming the configs (a merge figure names its one config and the split)."""
     body, _, _ = plot(f, cfgs)
     lead = f.lead
     every = [r for _, _, rows in cfgs for r in rows]
     trials = max(r["trials"] for r in every)
     w = FIG_ML + W
     textw = w - FIG_ML - ML - 8
-    sub = (wrap("configs: " + " | ".join(s.config for _, s, _ in cfgs), textw, 6.4)
+    sub = (wrap(note or "configs: " + " | ".join(s.config for _, s, _ in cfgs), textw, 6.4)
            + wrap(f"{lead.data_note} · {trials} trials per N", textw, 6.4))
     top = 40 + 15 * len(sub)
     # First the configs, one color each; then, on a new row, what the shapes mean.
-    items = [(f"c{i}", f"{s.label} · {bound_summary(rows)}") for i, s, rows in cfgs]
+    items = [(f"c{i}", getattr(s, "legend", None) or f"{s.label} · {bound_summary(rows)}") for i, s, rows in cfgs]
     items += [None, ("band gray", f"shaded: {band_label(lead.signed, every)}"), ("median gray", "median"),
               ("theory gray", f"theory: {theory_note(f, cfgs)}")]
     legend, x, y = [], FIG_ML + ML, top + H + 14
@@ -417,7 +505,7 @@ def figure(f, cfgs) -> str:
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">',
            f'<style>{FIG_STYLE}</style>',
            f'<rect width="{w}" height="{h}" fill="#ffffff"/>',
-           f'<text class="title" x="{FIG_ML + ML}" y="22">{html.escape(f.title)}</text>',
+           f'<text class="title" x="{FIG_ML + ML}" y="22">{html.escape(title or f.title)}</text>',
            *(f'<text class="sub" x="{FIG_ML + ML}" y="{40 + 15 * i}">{html.escape(line)}</text>' for i, line in enumerate(sub)),
            f'<text class="axis" transform="translate(16 {ymid:.0f}) rotate(-90)" text-anchor="middle">'
            f'{html.escape(lead.metric)}</text>',
@@ -509,30 +597,37 @@ document.querySelectorAll('.card').forEach(card=>{
 """
 
 
-def page(run: Path, summary: dict) -> str:
+def card(f, cfgs, title: str | None = None, note: str | None = None) -> str:
+    lead = f.lead
+    every = [r for _, _, rows in cfgs for r in rows]
+    chips = "".join(f'<span><i class="sw c{i}"></i><b>{html.escape(s.label)}</b> <code>{html.escape(s.config)}</code>'
+                    f' {html.escape(bound_summary(rows) if not hasattr(s, "legend") else s.legend.split(" · ", 1)[1])}</span>'
+                    for i, s, rows in cfgs)
+    tables = "".join(f'<h3><i class="sw c{i}"></i> {html.escape(s.label)} <code>{html.escape(s.config)}</code></h3>'
+                     f'<div class="tbl">{table(s.id, rows)}</div>' for i, s, rows in cfgs)
+    return (f'<section class="card"><h2>{html.escape(title or f.title)}</h2>'
+            f'<p class="sub">y: {html.escape(lead.metric)} · data: {html.escape(lead.data_note)}<br>'
+            + (f'{html.escape(note)}<br>' if note else '')
+            + f'theory: {html.escape(theory_note(f, cfgs))}<br>shaded: {html.escape(band_label(lead.signed, every))}</p>'
+            f'<div class="cfgs">{chips}</div>'
+            f'{chart(f, cfgs, title)}<div class="tip"></div>'
+            f'<details><summary>Tables</summary>{tables}</details></section>')
+
+
+def page(run: Path, summary: dict, merged: dict) -> str:
     meta = json.loads((run / "meta.json").read_text())
     ns = sorted({r["n"] for rows in summary.values() for r in rows})
     trials = max(r["trials"] for rows in summary.values() for r in rows)
     hosts = sorted({h["where"] + (f", {h['cpu']}, {h['cores']} cores" if h["cores"] else "")
                     for h in (run["host"] for run in meta.get("runs", []))})
-    cards = []
-    for f in FAMILIES:
-        cfgs = present(f, summary)
-        if not cfgs:
-            continue
-        lead = f.lead
-        every = [r for _, _, rows in cfgs for r in rows]
-        chips = "".join(f'<span><i class="sw c{i}"></i><b>{html.escape(s.label)}</b> <code>{html.escape(s.config)}</code>'
-                        f' {html.escape(bound_summary(rows))}</span>' for i, s, rows in cfgs)
-        tables = "".join(f'<h3><i class="sw c{i}"></i> {html.escape(s.label)} <code>{html.escape(s.config)}</code></h3>'
-                         f'<div class="tbl">{table(s.id, rows)}</div>' for i, s, rows in cfgs)
-        cards.append(
-            f'<section class="card"><h2>{html.escape(f.title)}</h2>'
-            f'<p class="sub">y: {html.escape(lead.metric)} · data: {html.escape(lead.data_note)}<br>'
-            f'theory: {html.escape(theory_note(f, cfgs))}<br>shaded: {html.escape(band_label(lead.signed, every))}</p>'
-            f'<div class="cfgs">{chips}</div>'
-            f'{chart(f, cfgs)}<div class="tip"></div>'
-            f'<details><summary>Tables</summary>{tables}</details></section>')
+    cards = [card(f, cfgs) for f in FAMILIES if (cfgs := present(f, summary))]
+    merge_cards = [card(f, cfgs, f"{f.title}, merged", f"config {f.merged.config}: {MERGE_NOTE}")
+                   for f in FAMILIES if (cfgs := merge_present(f, summary, merged))]
+    merge_section = (f"""<h2 style="margin:32px 0 4px">Merged sketches</h2>
+<p class="read">Each card takes one config of a sketch and runs the same trials again with sketch-bench's merge:
+{html.escape(MERGE_NOTE)}. A sketch that merges exactly gives the unmerged error in every trial; the legend and the
+hover say how often that held. The dashed lines are the unmerged sketch's bound, which a merged sketch should keep.</p>
+<div class="grid-cards">{''.join(merge_cards)}</div>""" if merge_cards else "")
     legend = ('<div class="legend">'
               '<span><i class="sw c0"></i><i class="sw c1"></i><i class="sw c2"></i>one color per config</span>'
               '<span><i class="sw" style="background:var(--muted);opacity:.5"></i>share of trials the bound covers</span>'
@@ -553,6 +648,7 @@ line is the median. Dashed lines are asap_sketchlib's own theoretical error (<co
 asked at each N: each shaded area should stay inside its own dashed lines. Hover a point for every config's quantiles.</p>
 {legend}
 <div class="grid-cards">{''.join(cards)}</div>
+{merge_section}
 </main><script>{JS}</script></body></html>
 """
 
@@ -564,13 +660,20 @@ def main() -> None:
     meta = json.loads((args.run / "meta.json").read_text())
     summary = aggregate(args.run / "raw.jsonl", meta)
     (args.run / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
-    (args.run / "index.html").write_text(page(args.run, summary))
+    merged = aggregate_merge(args.run, summary)
+    if merged:
+        (args.run / "merge_summary.json").write_text(json.dumps(merged, indent=1) + "\n")
+    (args.run / "index.html").write_text(page(args.run, summary, merged))
     figs = args.run / "figures"
     figs.mkdir(exist_ok=True)
     for f in FAMILIES:
         cfgs = present(f, summary)
         if cfgs:
             (figs / f"{f.id}.svg").write_text(figure(f, cfgs))
+        cfgs = merge_present(f, summary, merged)
+        if cfgs:
+            (figs / f"{f.id}-merge.svg").write_text(
+                figure(f, cfgs, f"{f.title}, merged", f"config {f.merged.config}: {MERGE_NOTE}"))
     print(args.run / "index.html")
     print(figs)
 

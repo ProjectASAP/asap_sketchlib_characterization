@@ -79,6 +79,19 @@ class Family:
         """The config whose metric, data and sign the whole figure shares."""
         return self.configs[0]
 
+    @property
+    def merged(self) -> Sketch | None:
+        """The config the merge figure splits into shards: the middle one, if the sketch merges."""
+        return None if self.id in UNMERGEABLE else self.configs[1]
+
+
+# Shard counts of the merge figures: sketch-bench --operations merge splits each trial's stream
+# into this many contiguous stretches, builds one sketch per stretch, merges them and scores the
+# result against the whole stream. sketch-bench's HLL HIP has no merge (its running estimate
+# cannot be combined).
+MERGE_SHARDS = (2, 8)
+UNMERGEABLE = {"hll-hip"}
+
 
 def n_grid(lg_min: int, lg_max: int, ppo: int) -> list[int]:
     return sorted({round(2 ** (lg_min + i / ppo)) for i in range((lg_max - lg_min) * ppo + 1)})
@@ -355,3 +368,4 @@ SKETCHES = [s for f in FAMILIES for s in f.configs]
 BY_ID = {s.id: s for s in SKETCHES}
 BY_FAMILY = {f.id: f for f in FAMILIES}
 assert len(BY_ID) == len(SKETCHES) and not set(BY_ID) & set(BY_FAMILY), "ids and family names must be unique"
+assert UNMERGEABLE <= set(BY_FAMILY)

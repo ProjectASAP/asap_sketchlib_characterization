@@ -11,7 +11,7 @@ from pathlib import Path
 
 from grid import SKETCHES
 
-DATA = ("raw.jsonl", "cms_point_query.jsonl")
+DATA = ("raw.jsonl", "merge.jsonl", "cms_point_query.jsonl")
 
 
 def main() -> int:
@@ -33,6 +33,8 @@ def main() -> int:
         meta["trials"] = {**meta.get("trials", {}), **m.get("trials", {})}
         meta["n"] = sorted(set(meta.get("n", [])) | set(m.get("n", [])))
         meta["runs"] = meta.get("runs", []) + m.get("runs", [])
+        for i, by_shards in m.get("merge", {}).items():
+            meta.setdefault("merge", {}).setdefault(i, {}).update(by_shards)
     order = [s.id for s in SKETCHES]
     meta["sketches"] = [i for i in order if i in meta["trials"]]
 
